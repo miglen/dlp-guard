@@ -1,7 +1,9 @@
 // content.js — DLP Guard content script.
 // Detects secrets in rendered page text and hides them behind mask chips;
 // redacts secrets on paste before they reach chat inputs.
-// Runs after engine.js + pageguard.js + patterns.generated.js (same world).
+// Runs at document_start after engine.js + pageguard.js + patterns.generated.js
+// (same isolated world), so the paste listener is registered before any page
+// script can add its own.
 'use strict';
 
 (() => {
@@ -29,14 +31,18 @@
     cats: { ...DlpEngine.CATEGORY_DEFAULTS },
     disabledSites: [],
     suspendReason: null, // non-null → login/registration page, do nothing
-    maskCount: 0,        // total secrets hidden on this page (cumulative)
+    maskCount: 0,        // secrets currently hidden on this page
     pasteCount: 0,       // total secrets redacted from pastes
   };
 
   /** Real values for masked spans — closure-held, never written into the DOM. */
   const originals = new WeakMap();
-  /** Text nodes we created ourselves (post-mask segments) — skip rescanning. */
+  /** Text nodes we created ourselves (post-mask segments). Skipped by the
+   *  observer path to avoid feedback loops; full scans deliberately ignore
+   *  this set so nothing is ever permanently exempt from scanning. */
   const ourTextNodes = new WeakSet();
+  /** Invalidates in-flight chunked scans when settings/guard state change. */
+  let scanGeneration = 0;
 
   // ── Settings ───────────────────────────────────────────────────────────────
 
@@ -48,6 +54,7 @@
     STATE.cats = { ...DlpEngine.CATEGORY_DEFAULTS, ...(items.dlp_cats || {}) };
     STATE.disabledSites = Array.isArray(items.dlp_disabledSites) ? items.dlp_disabledSites : [];
     DlpEngine.compile(STATE.cats);
+    scanGeneration++;
   }
 
   function siteDisabled() {
@@ -62,7 +69,11 @@
     applySettings(items);
     STATE.ready = true;
     evaluateGuard(true);
-    if (isActive() && STATE.maskOnPage) scheduleFullScan();
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => scheduleFullScan());
+    } else {
+      scheduleFullScan();
+    }
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -71,7 +82,7 @@
       applySettings(items);
       // Settings changed: start from a clean slate, then re-mask if active.
       unmaskAll();
-      if (isActive() && STATE.maskOnPage) scheduleFullScan();
+      scheduleFullScan();
     });
   });
 
@@ -81,11 +92,13 @@
     const reason = PageGuard.suspendReason();
     if (reason && !STATE.suspendReason) {
       STATE.suspendReason = reason;
+      scanGeneration++; // kill in-flight scans immediately
       unmaskAll();
       if (!initial) console.info(`${LOG_PREFIX} suspended — ${reason}`);
+      reportCount();
     } else if (!reason && STATE.suspendReason) {
       STATE.suspendReason = null;
-      if (isActive() && STATE.maskOnPage) scheduleFullScan();
+      scheduleFullScan();
     }
   }
 
@@ -96,8 +109,16 @@
       evaluateGuard(false);
     }
   }
-  window.addEventListener('popstate', () => { checkUrlChange(); evaluateGuard(false); });
-  window.addEventListener('hashchange', () => { checkUrlChange(); evaluateGuard(false); });
+  window.addEventListener('popstate', () => checkUrlChange());
+  window.addEventListener('hashchange', () => checkUrlChange());
+  // history.pushState in the page world is invisible to this isolated world,
+  // so poll as a backstop for SPA route changes that mutate nothing right away.
+  setInterval(checkUrlChange, 1000);
+
+  // Re-publish the badge count when a bfcache-restored page comes back.
+  window.addEventListener('pageshow', (e) => {
+    if (e.persisted) reportCount();
+  });
 
   // ── Masking ────────────────────────────────────────────────────────────────
 
@@ -148,8 +169,12 @@
     return false;
   }
 
-  function processTextNode(node) {
-    if (!node.isConnected || ourTextNodes.has(node)) return;
+  // fromFullScan: full sweeps ignore the ourTextNodes skip so that restored or
+  // split segments are always re-examined; the observer path keeps the skip to
+  // avoid processing our own insertions in a loop.
+  function processTextNode(node, fromFullScan) {
+    if (!node.isConnected) return;
+    if (!fromFullScan && ourTextNodes.has(node)) return;
     const text = node.nodeValue;
     if (!text || text.length < 6) return;
     if (shouldSkipNode(node)) return;
@@ -185,11 +210,13 @@
   }
 
   function unmaskAll() {
+    scanGeneration++; // any in-flight scan chain is now stale
     const spans = document.querySelectorAll(`[${MASK_ATTR}]`);
     for (const span of spans) {
       const real = originals.get(span);
-      const textNode = document.createTextNode(real != null ? real : span.textContent);
-      ourTextNodes.add(textNode);
+      // A chip whose original was lost (e.g. framework cloned the element)
+      // must not "restore" its decorative chip text as if it were content.
+      const textNode = document.createTextNode(real != null ? real : '');
       span.parentNode?.replaceChild(textNode, span);
     }
     STATE.maskCount = 0;
@@ -197,20 +224,19 @@
   }
 
   // Click a chip → reveal; click again → hide. Delegated, capture phase.
+  // isTrusted: page scripts must not be able to force-reveal via synthetic clicks.
   document.addEventListener('click', (ev) => {
-    if (!STATE.revealOnClick) return;
+    if (!ev.isTrusted || !STATE.revealOnClick) return;
     const span = ev.target instanceof Element ? ev.target.closest(`[${MASK_ATTR}]`) : null;
-    if (!span) return;
+    if (!span || !originals.has(span)) return;
     ev.preventDefault();
     ev.stopPropagation();
     if (span.hasAttribute('data-dlpg-revealed')) {
       span.removeAttribute('data-dlpg-revealed');
       span.textContent = maskChipText(span.getAttribute(MASK_ATTR));
     } else {
-      const real = originals.get(span);
-      if (real == null) return;
       span.setAttribute('data-dlpg-revealed', '1');
-      span.textContent = real;
+      span.textContent = originals.get(span);
     }
   }, true);
 
@@ -253,23 +279,28 @@
       return;
     }
     const batch = [];
+    let fromFullScan = false;
     if (fullScanQueued) {
       fullScanQueued = false;
+      fromFullScan = true;
       pendingNodes.clear();
       if (document.body) collectTextNodes(document.body, batch);
     } else {
       for (const root of pendingNodes) collectTextNodes(root, batch);
       pendingNodes.clear();
     }
-    processInChunks(batch, 0);
+    processInChunks(batch, 0, scanGeneration, fromFullScan);
   }
 
-  function processInChunks(nodes, offset) {
+  function processInChunks(nodes, offset, generation, fromFullScan) {
+    // Bail out when the world changed under us: settings toggled, page
+    // suspended (login modal appeared), or masking disabled mid-scan.
+    if (generation !== scanGeneration || !isActive() || !STATE.maskOnPage) return;
     const CHUNK = 300;
     const end = Math.min(offset + CHUNK, nodes.length);
-    for (let i = offset; i < end; i++) processTextNode(nodes[i]);
+    for (let i = offset; i < end; i++) processTextNode(nodes[i], fromFullScan);
     if (end < nodes.length) {
-      const next = () => processInChunks(nodes, end);
+      const next = () => processInChunks(nodes, end, generation, fromFullScan);
       if (typeof requestIdleCallback === 'function') requestIdleCallback(next, { timeout: 500 });
       else setTimeout(next, 30);
     }
@@ -282,7 +313,7 @@
       if (mut.type === 'characterData') {
         const t = mut.target;
         if (t.parentElement && t.parentElement.closest(`[${MASK_ATTR}]`)) continue;
-        if (ourTextNodes.has(t)) ourTextNodes.delete?.(t); // re-eligible after edit
+        ourTextNodes.delete(t); // content changed → re-eligible for scanning
         pendingNodes.add(t);
         touched = true;
       } else if (mut.type === 'childList') {
@@ -309,11 +340,34 @@
 
   // ── Paste redaction ────────────────────────────────────────────────────────
 
-  document.addEventListener('paste', (event) => {
-    if (!isActive() || !STATE.redactPaste) return;
+  // Returns the editable root the paste lands in, or null when the paste
+  // target is not editable (then we must not touch the event or the DOM).
+  function getEditableRoot(target) {
+    if (target instanceof HTMLTextAreaElement) return target;
+    if (target instanceof HTMLInputElement) {
+      return PageGuard.isPasswordInput(target) ? null : target;
+    }
+    let el = target instanceof Element ? target : target?.parentElement;
+    let root = null;
+    while (el) {
+      if (el.isContentEditable) root = el;
+      el = el.parentElement;
+    }
+    return root;
+  }
+
+  // Registered on window in the capture phase at document_start, so it runs
+  // before any page-registered paste listener can read the raw clipboard.
+  window.addEventListener('paste', (event) => {
+    if (!STATE.ready || !STATE.enabled || !STATE.redactPaste || siteDisabled()) return;
+    // Re-check the guard synchronously — a login modal may have appeared
+    // within the observer debounce window, or a password field may currently
+    // be toggled to type="text".
+    if (STATE.suspendReason || PageGuard.suspendReason()) return;
+
     const target = event.target;
-    // Never touch password inputs or forms that contain one.
-    if (target instanceof HTMLInputElement && target.type === 'password') return;
+    const editable = getEditableRoot(target);
+    if (!editable) return; // nothing will be inserted; don't touch the page
     if (PageGuard.inPasswordForm(target)) return;
 
     const raw = event.clipboardData?.getData('text');
@@ -323,14 +377,14 @@
 
     event.preventDefault();
     event.stopImmediatePropagation();
-    insertText(target, sanitized);
+    insertText(editable, sanitized);
     STATE.pasteCount += count;
     console.info(`${LOG_PREFIX} redacted ${count} secret(s) from paste.`);
     reportCount();
     showToast(`${count} secret${count > 1 ? 's' : ''} redacted from paste`);
   }, true);
 
-  function insertText(target, text) {
+  function insertText(editable, text) {
     // execCommand routes through the editing pipeline, so React/ProseMirror
     // editors (ChatGPT, Claude, DeepSeek, Kimi, Lovable) treat it as typing.
     let inserted = false;
@@ -339,22 +393,24 @@
     } catch (_e) { /* fall through */ }
     if (inserted) return;
 
-    if (target && typeof target.setRangeText === 'function') {
-      const start = target.selectionStart ?? 0;
-      const end = target.selectionEnd ?? 0;
-      target.setRangeText(text, start, end, 'end');
-      target.dispatchEvent(new Event('input', { bubbles: true }));
+    if (typeof editable.setRangeText === 'function') {
+      const start = editable.selectionStart ?? 0;
+      const end = editable.selectionEnd ?? 0;
+      editable.setRangeText(text, start, end, 'end');
+      editable.dispatchEvent(new Event('input', { bubbles: true }));
       return;
     }
+    // Selection fallback — only inside the editable root, never on page DOM.
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return;
     const range = sel.getRangeAt(0);
+    if (!editable.contains(range.commonAncestorContainer)) return;
     range.deleteContents();
     range.insertNode(document.createTextNode(text));
     range.collapse(false);
     sel.removeAllRanges();
     sel.addRange(range);
-    target?.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, data: text }));
+    editable.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, data: text }));
   }
 
   // ── Status + badge ─────────────────────────────────────────────────────────

@@ -59,12 +59,15 @@ const DlpEngine = (() => {
 
   // Find secret ranges in a plain string.
   // Returns non-overlapping [{start, end, label}] sorted by start.
-  function findRanges(text) {
+  // maxRanges bounds work on pathological page nodes; paste redaction passes
+  // Infinity — it must never silently leave later secrets unredacted.
+  function findRanges(text, maxRanges = 500) {
     if (!compiled || !text || text.length < 6) return [];
 
     const hasAssignChar = text.indexOf('=') !== -1 || text.indexOf(':') !== -1;
+    // A broken prefilter must fail open (run the patterns), never fail closed.
     const runAssignments =
-      hasAssignChar && assignmentPrefilter && assignmentPrefilter.test(text);
+      hasAssignChar && (!assignmentPrefilter || assignmentPrefilter.test(text));
     const lower = runAssignments ? text.toLowerCase() : '';
 
     const ranges = [];
@@ -86,13 +89,14 @@ const DlpEngine = (() => {
           [start, end] = idx;
         }
         ranges.push({ start, end, label: p.label });
-        if (ranges.length > 500) return mergeRanges(ranges); // runaway page guard
+        if (ranges.length > maxRanges) return mergeRanges(ranges);
       }
     }
     return mergeRanges(ranges);
   }
 
-  // Sort by start; on overlap keep the earlier start, then the longer match.
+  // Sort by start; overlapping ranges are merged (extended), never dropped —
+  // a partially-overlapping detection must not leave its tail unmasked.
   function mergeRanges(ranges) {
     ranges.sort((a, b) => a.start - b.start || b.end - a.end);
     const out = [];
@@ -100,6 +104,9 @@ const DlpEngine = (() => {
     for (const r of ranges) {
       if (r.start >= lastEnd) {
         out.push(r);
+        lastEnd = r.end;
+      } else if (r.end > lastEnd) {
+        out[out.length - 1].end = r.end;
         lastEnd = r.end;
       }
     }
@@ -109,7 +116,7 @@ const DlpEngine = (() => {
   // Replace all detected secrets in a string with [HIDDEN_<LABEL>].
   // Returns {text, count}.
   function redactString(text) {
-    const ranges = findRanges(text);
+    const ranges = findRanges(text, Infinity);
     if (ranges.length === 0) return { text, count: 0 };
     let out = '';
     let pos = 0;

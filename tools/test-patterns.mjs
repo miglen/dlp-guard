@@ -112,6 +112,72 @@ for (const [name, text] of negatives) {
   DlpEngine.compile({ token: false, assignment: false, privatekey: false, infra: false, generic: false });
   const r = DlpEngine.findRanges('AKIAIOSFODNN7EXAMPLE api_key: 8f2a9c1d4e5b6a7f8091');
   expect('all-off finds nothing', r.length === 0, JSON.stringify(r));
+  DlpEngine.compile({ token: true, assignment: true, privatekey: true, infra: false, generic: false });
+}
+
+// ── 8. overlapping detections merge (never drop a tail) ──────────────────────
+{
+  // assignment value and token pattern overlap on the same key
+  const s = 'aws_key: AKIAIOSFODNN7EXAMPLE tail';
+  const ranges = DlpEngine.findRanges(s);
+  const covered = ranges.some((r) => s.slice(r.start, r.end).includes('AKIAIOSFODNN7EXAMPLE'));
+  expect('overlap union covers full token', covered, JSON.stringify(ranges));
+  const { text } = DlpEngine.redactString(s);
+  expect('no partial token survives', !text.includes('AKIA'), text);
+}
+
+// ── 9. redactString is uncapped — every secret in a huge paste is redacted ───
+{
+  const big = 'AKIAIOSFODNN7EXAMPLE '.repeat(520);
+  const { text, count } = DlpEngine.redactString(big);
+  expect('uncapped redaction count', count >= 520, `count=${count}`);
+  expect('uncapped redaction no leak', !text.includes('AKIA'), '');
+}
+
+// ── 10. assignment base trimming (dataset labels with stray spaces) ──────────
+{
+  const r = DlpEngine.findRanges('magento_auth_username: someuser1234');
+  expect('trimmed assignment base matches', r.length === 1, JSON.stringify(r));
+}
+
+// ── 11. page guard URL matrix ─────────────────────────────────────────────────
+{
+  const guardCode = src('pageguard.js');
+  function guardFor(hostname, pathname) {
+    const sandbox2 = {};
+    const stubDoc = { querySelector: () => null, querySelectorAll: () => [], title: '' };
+    const stubLoc = { hostname, pathname, search: '', hash: '' };
+    new Function('location', 'document', 'Node', 'HTMLInputElement', 'sandbox',
+      `${guardCode}\nsandbox.PageGuard = PageGuard;`)(stubLoc, stubDoc, { TEXT_NODE: 3 }, class {}, sandbox2);
+    return sandbox2.PageGuard.suspendReason();
+  }
+  const mustAllow = [
+    ['chatgpt.com', '/c/6789abcd-1234'],
+    ['claude.ai', '/chat/6789abcd-1234'],
+    ['chat.deepseek.com', '/'],
+    ['www.kimi.com', '/'],
+    ['lovable.dev', '/projects/my-login-page-clone'],
+    ['chatgpt.com', '/share/how-to-login-securely'],
+    ['gemini.google.com', '/app/abc123'],
+    ['github.com', '/settings/tokens'],
+    ['docs.google.com', '/document/d/abc123/edit'],
+    ['example.com', '/blog/authors/jane'],
+  ];
+  const mustSuspend = [
+    ['accounts.google.com', '/'],
+    ['example.com', '/login'],
+    ['example.com', '/signup'],
+    ['app.example.com', '/users/sign_in'],
+    ['example.com', '/oauth2/authorize'],
+    ['join.slack.com', '/'],
+    ['example.com', '/reset-password'],
+  ];
+  for (const [h, p] of mustAllow) {
+    expect(`guard allows ${h}${p}`, guardFor(h, p) === null, `got: ${guardFor(h, p)}`);
+  }
+  for (const [h, p] of mustSuspend) {
+    expect(`guard suspends ${h}${p}`, guardFor(h, p) !== null, 'got: null');
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

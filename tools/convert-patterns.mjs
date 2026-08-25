@@ -184,7 +184,8 @@ for (const e of entries) {
   let valueGroup = 0;
 
   if (category === 'assignment') {
-    const base = source.replace(ASSIGNMENT_TAIL, '');
+    // trim: a stray trailing space in the label would make 'key: value' unmatchable
+    const base = source.replace(ASSIGNMENT_TAIL, '').trim();
     const { src: jsBase, flags } = toJsRegex(base);
     // group 1 = the value; label patterns contain no capture groups of their own
     const groupCount = countGroups(jsBase);

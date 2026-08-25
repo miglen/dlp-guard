@@ -2,9 +2,9 @@
   "manifest_version": 3,
   "name": "DLP Guard — Secret Detector & Hider",
   "version": "0.1.0",
-  "description": "Detects secrets, API keys, and tokens rendered on web pages and hides them. Redacts secrets on paste into AI chat tools. 100% local — nothing ever leaves your browser. Never runs on login, password, or registration pages.",
+  "description": "Hides secrets, API keys, and tokens on web pages and redacts pastes. 100% local. Never runs on login or registration pages.",
+  "minimum_chrome_version": "111",
   "permissions": ["storage"],
-  "host_permissions": ["<all_urls>"],
   "action": {
     "default_popup": "popup.html",
     "default_title": "DLP Guard",
@@ -25,8 +25,7 @@
         "src/pageguard.js",
         "src/content.js"
       ],
-      "run_at": "document_idle",
-      "world": "ISOLATED"
+      "run_at": "document_start"
     }
   ],
   "background": {

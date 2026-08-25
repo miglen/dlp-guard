@@ -48,6 +48,10 @@ function queryTab() {
       $('site').disabled = true;
       return;
     }
+    // Badge-accurate count (summed across all frames) comes from the background.
+    chrome.runtime.sendMessage({ type: 'DLP_GET_TAB_COUNT', tabId: tab.id }, (r) => {
+      if (!chrome.runtime.lastError && r) $('count').textContent = String(r.total);
+    });
     chrome.tabs.sendMessage(tab.id, { type: 'DLP_GET_STATUS' }, { frameId: 0 }, (resp) => {
       if (chrome.runtime.lastError || !resp) {
         setStatus('off', 'Not active on this page (browser page or no content script)');
@@ -55,10 +59,10 @@ function queryTab() {
         $('siteLabel').textContent = 'Enable on this site';
         return;
       }
+      $('site').disabled = false; // a transient failure must not stick
       currentHostname = resp.hostname;
       $('siteLabel').textContent = `Enable on ${resp.hostname || 'this site'}`;
       $('site').checked = !resp.siteDisabled;
-      $('count').textContent = String(resp.maskCount + resp.pasteCount);
       if (resp.suspended) {
         setStatus('warn', `Suspended — ${resp.reason}. DLP Guard never runs on login or registration pages.`);
       } else if (resp.siteDisabled) {

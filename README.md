@@ -24,12 +24,23 @@ DOM or to storage), and only *counts* are sent to the service worker for the bad
   Click a chip to reveal/re-hide (toggleable).
 - **Redact on paste** — pasted text is scanned before insertion; secrets become
   `[HIDDEN_<TYPE>]`. Works in `<textarea>`, `<input>`, and contenteditable editors
-  (ProseMirror/React chat inputs) via `execCommand('insertText')`.
+  (ProseMirror/React chat inputs) via `execCommand('insertText')`. The listener is
+  registered at `document_start` on `window` (capture), so it runs before any page
+  script can observe the raw clipboard. Pastes outside editable fields are never
+  touched.
 - **Login-page suspension** — the extension never runs when any of these is true:
-  a password field is present, the hostname starts with an auth-ish prefix
-  (`login.`, `auth.`, `sso.`, `accounts.` …), the URL path/query contains auth segments
-  (`/login`, `/signup`, `/oauth`, `/reset-password` …), or the title looks like an auth
-  page. Paste-redaction additionally skips any form containing a password field.
+  a password field is present (including open shadow DOM, `type="password"` or
+  `autocomplete="current-password"/"new-password"` — so "show password" toggles are
+  still covered), the hostname starts with an auth prefix (`login.`, `auth.`, `sso.`,
+  `accounts.`, `join.` …), or the URL path/query contains auth segments (`/login`,
+  `/signup`, `/oauth`, `/reset-password` …). Auth words are matched only between real
+  URL delimiters, so content slugs like `/projects/my-login-page` don't false-suspend.
+  The page title is deliberately NOT a signal — on AI chat sites the title is the
+  conversation name, and chatting about passwords must not disable protection.
+  The guard is re-checked synchronously on every paste, on SPA route changes
+  (`popstate`, `hashchange`, and a 1s `location.href` poll for `pushState`), and on
+  every DOM mutation batch. Paste-redaction additionally skips password inputs and
+  any form containing one.
 - **Pattern categories** (toggle in popup):
   | Category | Count | Default | What |
   |---|---|---|---|
@@ -90,3 +101,13 @@ against regressions including ReDoS (worst-case inputs must scan in <200 ms).
   confidence "low" there); placeholder values (`YOUR_API_KEY`, `<key>`, `****`) are
   filtered out, but expect occasional false positives — use the category toggles or
   per-site disable.
+- Closed shadow roots cannot be inspected by any extension; a password field inside
+  one is invisible to the login guard (the URL/host heuristics still apply).
+- Suspension is deliberately fail-closed: any page containing a password field is
+  left alone, so a page could disable masking by embedding a hidden password input.
+  That trades adversarial-page resistance for the hard guarantee of never touching
+  credential flows.
+- Masking rewrites the page DOM (secrets the page already had). Revealed values and
+  restored text are visible to page scripts — the extension never exposes anything
+  the page didn't already have, but it cannot remove what the page server already
+  received.
