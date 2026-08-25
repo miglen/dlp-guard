@@ -321,6 +321,29 @@ WRuPspPXIAHPKrjEHkUsgDZHW/V0fJWbIjJarw==
   expect('seed phrase off by default', DlpEngine.findRanges(seed).length === 0, '');
 }
 
+// ── 15c. user-defined regex patterns (options page) ──────────────────────────
+{
+  const CATS = { token: true, assignment: true, privatekey: true, custom: true, user: true, pii: false, infra: false, generic: false };
+  const userPatterns = [
+    { id: 'u1', label: 'INTERNAL_ID', source: 'ACME-\\d{6,}', flags: 'g', valueGroup: 0, mask: 'affix', enabled: true },
+    { id: 'u2', label: 'TICKET', source: 'JIRA:\\s*([A-Z]{2,}-\\d+)', flags: 'g', valueGroup: 1, mask: 'stars', enabled: true },
+    { id: 'u3', label: 'DISABLED', source: 'SHOULDNOTMATCH', flags: 'g', valueGroup: 0, mask: 'stars', enabled: false },
+  ];
+  DlpEngine.compile(CATS, [], userPatterns);
+  expect('user pattern matches', DlpEngine.findRanges('id ACME-123456 done').length === 1, '');
+  expect('user value-group masks only group', (() => {
+    const s = 'ref JIRA: OPS-42 end';
+    const r = DlpEngine.findRanges(s);
+    return r.length === 1 && s.slice(r[0].start, r[0].end) === 'OPS-42';
+  })(), '');
+  expect('disabled user pattern skipped', DlpEngine.findRanges('x SHOULDNOTMATCH x').length === 0, '');
+  const { text } = DlpEngine.redactString('id ACME-123456 and JIRA: OPS-42');
+  expect('user affix mask keeps prefix/suffix', /ACME[*-]/.test(text) && !text.includes('123456'), text);
+  expect('user stars mask hides ticket', !text.includes('OPS-42'), text);
+  DlpEngine.compile(CATS); // reset
+  expect('user patterns cleared', DlpEngine.findRanges('ACME-123456').length === 0, '');
+}
+
 // ── 16. exfiltration threshold sanity (engine side) ───────────────────────────
 {
   const bulk = Array.from({ length: 12 }, (_, i) => `key${i}: AKIAIOSFODNN7EXAMPL${i % 10}`).join('\n');

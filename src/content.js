@@ -21,6 +21,8 @@
     dlp_exfilShield: true,
     dlp_cats: DlpEngine.CATEGORY_DEFAULTS,
     dlp_customTerms: [],
+    dlp_userPatterns: [],
+    dlp_exfilThreshold: 10,
     dlp_disabledSites: [],
   });
 
@@ -33,6 +35,8 @@
     exfilShield: true,
     cats: { ...DlpEngine.CATEGORY_DEFAULTS },
     customTerms: [],
+    userPatterns: [],
+    exfilThreshold: 10,
     disabledSites: [],
     suspendReason: null, // non-null → login/registration page, do nothing
     maskCount: 0,        // secrets currently hidden on this page
@@ -58,8 +62,10 @@
     STATE.exfilShield = items.dlp_exfilShield !== false;
     STATE.cats = { ...DlpEngine.CATEGORY_DEFAULTS, ...(items.dlp_cats || {}) };
     STATE.customTerms = Array.isArray(items.dlp_customTerms) ? items.dlp_customTerms : [];
+    STATE.userPatterns = Array.isArray(items.dlp_userPatterns) ? items.dlp_userPatterns : [];
+    STATE.exfilThreshold = Number(items.dlp_exfilThreshold) > 0 ? Number(items.dlp_exfilThreshold) : 10;
     STATE.disabledSites = Array.isArray(items.dlp_disabledSites) ? items.dlp_disabledSites : [];
-    DlpEngine.compile(STATE.cats, STATE.customTerms);
+    DlpEngine.compile(STATE.cats, STATE.customTerms, STATE.userPatterns);
     scanGeneration++;
   }
 
@@ -543,7 +549,7 @@
   // Copying a selection containing many detected secrets is blocked — the
   // clipboard gets a notice instead. Single-secret copies stay untouched;
   // this only guards against bulk exfiltration (threshold below).
-  const EXFIL_THRESHOLD = 10;
+  // configurable in the options page (dlp_exfilThreshold)
 
   function selectedTextForCopy() {
     const sel = window.getSelection();
@@ -566,7 +572,7 @@
     const selected = selectedTextForCopy();
     if (!selected || selected.length < 60) return;
     const ranges = DlpEngine.findRanges(selected, Infinity);
-    if (ranges.length < EXFIL_THRESHOLD) return;
+    if (ranges.length < STATE.exfilThreshold) return;
     event.preventDefault();
     event.stopImmediatePropagation(); // page copy handlers must not override the block
     event.clipboardData?.setData(

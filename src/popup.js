@@ -142,6 +142,11 @@ $('site').addEventListener('change', (e) => {
   chrome.storage.local.set({ dlp_disabledSites: disabledSites });
 });
 
+$('openOptions').addEventListener('click', () => {
+  if (chrome.runtime.openOptionsPage) chrome.runtime.openOptionsPage();
+  else window.open(chrome.runtime.getURL('options.html'));
+});
+
 loadSettings();
 queryTab();
 setInterval(queryTab, 1500); // keep count/status live while popup is open

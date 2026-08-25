@@ -87,6 +87,20 @@ DOM or to storage), and only *counts* are sent to the service worker for the bad
   extension) rather than corrupting the editor.
 - **Per-site disable** and a global kill switch in the popup; badge shows the number of
   secrets hidden/redacted on the current tab.
+- **Advanced settings page** (popup → *Advanced settings*, or the extension's Options)
+  — a tabbed UI for everything:
+  - **General** — all behavior toggles plus the exfiltration threshold
+  - **Detections** — enable/disable each built-in category, with live pattern counts
+  - **Custom regex** — add your own detectors (label, pattern, flags, value-capture
+    group, mask style), test them against sample text, edit/enable/delete. Every regex
+    is compile-checked and screened for catastrophic backtracking (static structural
+    lint + a bounded timing probe) before it can be saved, so a bad pattern can't hang
+    your pages. User patterns run only in the isolated content-script world.
+  - **Protected terms** — the custom-term editor with more room
+  - **Sites** — manage the disabled-site list
+  - **Stats & log** — lifetime counters and the full audit log, with reset/clear
+  - **Backup** — export the whole configuration to a JSON file and import it back
+    (import re-screens any custom regexes and drops unsafe ones)
 
 ## Install (test it now)
 

@@ -101,8 +101,10 @@ chrome.runtime.onInstalled.addListener(() => {
       dlp_redactPaste: true,
       dlp_revealOnClick: true,
       dlp_exfilShield: true,
-      dlp_cats: { token: true, assignment: true, privatekey: true, custom: true, pii: false, infra: false, generic: false },
+      dlp_exfilThreshold: 10,
+      dlp_cats: { token: true, assignment: true, privatekey: true, custom: true, user: true, pii: false, infra: false, generic: false },
       dlp_customTerms: [],
+      dlp_userPatterns: [],
       dlp_disabledSites: [],
     };
     const missing = {};

@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>DLP Guard — Settings</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f9fafb; --panel: #ffffff; --fg: #1f2937; --muted: #6b7280;
+    --border: #e5e7eb; --accent: #e02424; --accent-fg: #ffffff;
+    --ok-bg: #def7ec; --ok-fg: #03543f; --input-bg: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111827; --panel: #1f2937; --fg: #e5e7eb; --muted: #9ca3af;
+      --border: #374151; --input-bg: #111827; --ok-bg: #014737; --ok-fg: #84e1bc;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.5 system-ui, -apple-system, sans-serif;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 24px 20px 60px; }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+  header h1 { font-size: 20px; margin: 0; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
+  nav.tabs { display: flex; gap: 4px; border-bottom: 2px solid var(--border); margin-bottom: 20px; flex-wrap: wrap; }
+  nav.tabs button {
+    background: none; border: none; border-bottom: 2px solid transparent; margin-bottom: -2px;
+    padding: 10px 14px; font: 600 13px system-ui,sans-serif; color: var(--muted); cursor: pointer;
+  }
+  nav.tabs button.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab { display: none; }
+  .tab.active { display: block; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; margin-bottom: 16px; }
+  .card h2 { font-size: 14px; margin: 0 0 4px; }
+  .card p.hint { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
+  .row { display: flex; align-items: center; justify-content: space-between; padding: 7px 0; gap: 12px; border-top: 1px solid var(--border); }
+  .row:first-of-type { border-top: none; }
+  .row label { flex: 1; }
+  .row .desc { display: block; color: var(--muted); font-size: 12px; }
+  input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; flex-shrink: 0; }
+  input[type="number"], input[type="text"], textarea, select {
+    background: var(--input-bg); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 8px; font: 13px system-ui,sans-serif;
+  }
+  textarea { width: 100%; font-family: ui-monospace, Menlo, monospace; resize: vertical; }
+  .btn { background: var(--accent); color: var(--accent-fg); border: none; border-radius: 6px; padding: 8px 14px; font: 600 13px system-ui,sans-serif; cursor: pointer; }
+  .btn.secondary { background: var(--panel); color: var(--fg); border: 1px solid var(--border); }
+  .btn.small { padding: 4px 9px; font-size: 12px; }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  code { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
+  .mono { font-family: ui-monospace, Menlo, monospace; word-break: break-all; }
+  .pill { display: inline-block; background: var(--bg); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; font-size: 11px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .grid2 label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 3px; }
+  .grid2 input, .grid2 select { width: 100%; }
+  .full { grid-column: 1 / -1; }
+  .status { min-height: 18px; font-size: 12px; margin-top: 8px; }
+  .status.ok { color: var(--ok-fg); }
+  .status.err { color: var(--accent); }
+  .empty { color: var(--muted); font-size: 13px; padding: 12px 0; }
+  .statbig { font-size: 26px; font-weight: 700; }
+  .statrow { display: flex; gap: 24px; flex-wrap: wrap; }
+  .statrow > div { min-width: 120px; }
+  .statrow .lbl { color: var(--muted); font-size: 12px; }
+  .logscroll { max-height: 320px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+  .banner { background: var(--accent); color: #fff; padding: 8px 12px; border-radius: 8px; font-size: 13px; margin-bottom: 14px; display: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><span style="font-size:26px;">🛡️</span><h1>DLP Guard — Settings</h1></header>
+  <p class="sub">Everything runs locally in your browser. Nothing here is ever sent anywhere.</p>
+  <div class="banner" id="savedBanner">Saved.</div>
+
+  <nav class="tabs" id="tabs">
+    <button data-tab="general" class="active">General</button>
+    <button data-tab="detections">Detections</button>
+    <button data-tab="regex">Custom regex</button>
+    <button data-tab="terms">Protected terms</button>
+    <button data-tab="sites">Sites</button>
+    <button data-tab="stats">Stats &amp; log</button>
+    <button data-tab="io">Backup</button>
+  </nav>
+
+  <!-- GENERAL -->
+  <section class="tab active" id="tab-general">
+    <div class="card">
+      <h2>Protection</h2>
+      <div class="row"><label>Protection enabled<span class="desc">Master switch for the whole extension</span></label><input type="checkbox" data-setting="dlp_enabled"></div>
+      <div class="row"><label>Hide secrets on pages<span class="desc">Replace secrets shown on a page with masks</span></label><input type="checkbox" data-setting="dlp_maskOnPage"></div>
+      <div class="row"><label>Redact secrets on paste<span class="desc">Mask secrets pasted into inputs and chat boxes</span></label><input type="checkbox" data-setting="dlp_redactPaste"></div>
+      <div class="row"><label>Click a mask to reveal<span class="desc">Toggle a masked value back to plaintext (counts as a bypass)</span></label><input type="checkbox" data-setting="dlp_revealOnClick"></div>
+      <div class="row"><label>Exfiltration shield<span class="desc">Block copying a selection with many secrets</span></label><input type="checkbox" data-setting="dlp_exfilShield"></div>
+      <div class="row"><label>Exfiltration threshold<span class="desc">Minimum secrets in a selection before a copy is blocked</span></label><input type="number" min="1" max="1000" data-setting="dlp_exfilThreshold" style="width:80px;"></div>
+    </div>
+    <div class="card">
+      <h2>Login-page safety</h2>
+      <p class="hint">DLP Guard always suspends itself on login, password, and registration pages, and inside Google Workspace editors. This is not configurable by design.</p>
+    </div>
+  </section>
+
+  <!-- DETECTIONS -->
+  <section class="tab" id="tab-detections">
+    <div class="card">
+      <h2>Built-in detection categories</h2>
+      <p class="hint">The mask style is fixed per category. Noisy categories are off by default.</p>
+      <div class="row"><label>API keys &amp; tokens <span class="pill" id="cnt-token">–</span><span class="desc">AWS, Slack, Stripe, OpenAI, Anthropic, GitHub, JWT, crypto keys…</span></label><input type="checkbox" data-cat="token"></div>
+      <div class="row"><label>key = value assignments <span class="pill" id="cnt-assignment">–</span><span class="desc">Hides the value after <code>api_key:</code> / <code>SECRET=</code></span></label><input type="checkbox" data-cat="assignment"></div>
+      <div class="row"><label>Private key blocks <span class="pill" id="cnt-privatekey">–</span><span class="desc">Whole PEM/OpenSSH/PGP armor blocks</span></label><input type="checkbox" data-cat="privatekey"></div>
+      <div class="row"><label>PII &amp; identifiers <span class="pill" id="cnt-pii">–</span><span class="desc">IPs, emails, SSN, cards, IBAN, national IDs, seed phrases (noisy)</span></label><input type="checkbox" data-cat="pii"></div>
+      <div class="row"><label>Cloud endpoints <span class="pill" id="cnt-infra">–</span><span class="desc">*.amazonaws.com, *.cloudfront.net… (noisy)</span></label><input type="checkbox" data-cat="infra"></div>
+      <div class="row"><label>Generic URLs / UUIDs <span class="pill" id="cnt-generic">–</span><span class="desc">Broad catch-alls (very noisy)</span></label><input type="checkbox" data-cat="generic"></div>
+    </div>
+  </section>
+
+  <!-- CUSTOM REGEX -->
+  <section class="tab" id="tab-regex">
+    <div class="card">
+      <h2>Your regex patterns</h2>
+      <p class="hint">Add detectors for anything the built-ins miss — internal ID formats, ticket numbers, your own token shapes. Patterns run in the isolated content-script world (never exposed to the page). Test before saving; a catastrophic regex can slow pages down.</p>
+      <div class="grid2">
+        <div><label>Label (shown on the mask)</label><input type="text" id="rxLabel" placeholder="INTERNAL_ID" maxlength="40"></div>
+        <div><label>Flags</label><input type="text" id="rxFlags" placeholder="g or gi" value="g" maxlength="8"></div>
+        <div class="full"><label>Regular expression (JS syntax)</label><input type="text" id="rxSource" class="mono" placeholder="ACME-\\d{6,}"></div>
+        <div><label>Mask style</label><select id="rxMask"><option value="stars">Full stars</option><option value="affix">Keep prefix/suffix</option></select></div>
+        <div><label>Value group <span title="0 = mask the whole match; N = mask only capture group N">(?)</span></label><input type="number" id="rxGroup" min="0" max="9" value="0" style="width:70px;"></div>
+        <div class="full"><label>Test against sample text</label><input type="text" id="rxTest" class="mono" placeholder="Paste a sample line to see what matches"></div>
+      </div>
+      <div class="status" id="rxStatus"></div>
+      <div class="toolbar">
+        <button class="btn secondary small" id="rxTestBtn">Test</button>
+        <button class="btn small" id="rxAddBtn">Add pattern</button>
+        <button class="btn secondary small" id="rxCancelBtn" style="display:none;">Cancel edit</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Saved patterns (<span id="rxCount">0</span>)</h2>
+      <table id="rxTable"><thead><tr><th>On</th><th>Label</th><th>Pattern</th><th>Mask</th><th></th></tr></thead><tbody></tbody></table>
+      <div class="empty" id="rxEmpty">No custom patterns yet.</div>
+    </div>
+  </section>
+
+  <!-- PROTECTED TERMS -->
+  <section class="tab" id="tab-terms">
+    <div class="card">
+      <h2>Custom protected terms</h2>
+      <p class="hint">Literal words or phrases to always hide — server names, client names, project codenames. One per line, matched case-insensitively on word boundaries. Minimum 2 characters.</p>
+      <textarea id="termsArea" rows="8" placeholder="Acme Health Partners&#10;projekt-nightingale&#10;db-prod-07"></textarea>
+      <div class="toolbar"><button class="btn small" id="saveTermsBtn">Save terms</button><span class="status" id="termsStatus"></span></div>
+    </div>
+  </section>
+
+  <!-- SITES -->
+  <section class="tab" id="tab-sites">
+    <div class="card">
+      <h2>Disabled sites</h2>
+      <p class="hint">Hostnames where DLP Guard is turned off. Add from the popup's per-site toggle, or manage here.</p>
+      <div class="toolbar" style="margin-top:0; margin-bottom:10px;">
+        <input type="text" id="siteInput" placeholder="example.com" style="flex:1; min-width:200px;">
+        <button class="btn small" id="addSiteBtn">Add</button>
+      </div>
+      <table id="sitesTable"><tbody></tbody></table>
+      <div class="empty" id="sitesEmpty">No sites disabled.</div>
+    </div>
+  </section>
+
+  <!-- STATS -->
+  <section class="tab" id="tab-stats">
+    <div class="card">
+      <h2>Bypass &amp; block counters</h2>
+      <div class="statrow">
+        <div><div class="statbig" id="stBypass">0</div><div class="lbl">Originals pasted (bypass)</div></div>
+        <div><div class="statbig" id="stReveal">0</div><div class="lbl">Masks revealed</div></div>
+        <div><div class="statbig" id="stExfil">0</div><div class="lbl">Bulk copies blocked</div></div>
+      </div>
+      <div class="toolbar"><button class="btn secondary small" id="clearStatsBtn">Reset counters</button></div>
+    </div>
+    <div class="card">
+      <h2>Audit log <span class="pill" id="logCount">0</span></h2>
+      <p class="hint">Rolling record of bypasses and blocks. Records time, host, kind, and secret count only — never the values.</p>
+      <div class="logscroll"><table id="logTable"><thead><tr><th>When</th><th>Kind</th><th>Host</th><th>Secrets</th></tr></thead><tbody></tbody></table></div>
+      <div class="empty" id="logEmpty">Nothing logged yet.</div>
+      <div class="toolbar"><button class="btn secondary small" id="clearLogBtn">Clear log</button></div>
+    </div>
+  </section>
+
+  <!-- BACKUP -->
+  <section class="tab" id="tab-io">
+    <div class="card">
+      <h2>Export configuration</h2>
+      <p class="hint">Download all settings, custom patterns, and protected terms as a JSON file. Counters and the audit log are not included.</p>
+      <div class="toolbar"><button class="btn small" id="exportBtn">Export JSON</button></div>
+    </div>
+    <div class="card">
+      <h2>Import configuration</h2>
+      <p class="hint">Paste an exported JSON config and apply it. This replaces your current settings, custom patterns, and terms.</p>
+      <textarea id="importArea" rows="8" class="mono" placeholder='{ "dlp_cats": { … }, "dlp_userPatterns": [ … ] }'></textarea>
+      <div class="toolbar"><button class="btn small" id="importBtn">Import &amp; apply</button><span class="status" id="importStatus"></span></div>
+    </div>
+    <div class="card">
+      <h2>Reset</h2>
+      <p class="hint">Restore all settings to defaults. Custom patterns and terms are removed.</p>
+      <div class="toolbar"><button class="btn secondary small" id="resetBtn">Reset to defaults</button></div>
+    </div>
+  </section>
+</div>
+
+<script src="src/patterns.generated.js"></script>
+<script src="src/patterns.extra.js"></script>
+<script src="src/options.js"></script>
+</body>
+</html>

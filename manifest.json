@@ -32,6 +32,7 @@
   "background": {
     "service_worker": "src/background.js"
   },
+  "options_page": "options.html",
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'none'"
   },

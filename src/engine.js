@@ -10,6 +10,7 @@ const DlpEngine = (() => {
     assignment: true,
     privatekey: true,
     custom: true,
+    user: true,
     pii: false,
     infra: false,
     generic: false,
@@ -32,7 +33,7 @@ const DlpEngine = (() => {
     return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
-  function compile(enabledCategories, customTerms = []) {
+  function compile(enabledCategories, customTerms = [], userPatterns = []) {
     compiled = [];
     const extra = typeof DLP_EXTRA_PATTERNS !== 'undefined' ? DLP_EXTRA_PATTERNS : [];
     for (const p of [...DLP_PATTERNS, ...extra]) {
@@ -71,6 +72,30 @@ const DlpEngine = (() => {
           });
           minLen = Math.min(minLen, Math.max(2, term.length));
         } catch (_e) { /* skip unusable term */ }
+      }
+    }
+    // User-defined patterns from the options page. category 'user' is always
+    // on; a per-pattern enabled:false skips it. These are the user's own
+    // config (not page content), but a pathological regex could still slow
+    // pages — the options page compile-tests + time-guards them on save.
+    if (Array.isArray(userPatterns)) {
+      for (const up of userPatterns) {
+        if (!up || up.enabled === false || !up.source) continue;
+        try {
+          const vg = Number(up.valueGroup) > 0 ? Number(up.valueGroup) : 0;
+          let flags = String(up.flags || '').replace(/[^gimsuy]/g, '');
+          if (!flags.includes('g')) flags += 'g';
+          if (vg > 0 && !flags.includes('d')) flags += 'd';
+          compiled.push({
+            re: new RegExp(up.source, flags),
+            label: String(up.label || 'CUSTOM').toUpperCase().replace(/[^A-Z0-9]+/g, '_').slice(0, 40) || 'CUSTOM',
+            category: 'user',
+            valueGroup: vg,
+            lit: null,
+            validate: null,
+            mask: up.mask === 'affix' ? 'affix' : 'stars',
+          });
+        } catch (_e) { /* skip unusable user pattern */ }
       }
     }
     try {
@@ -133,7 +158,7 @@ const DlpEngine = (() => {
   // For identical ranges, the category decides the mask style — token wins so
   // e.g. AWS_ACCESS_KEY_ID="ASIA…" keeps its identifiable prefix rather than
   // getting the assignment pattern's full-star mask.
-  const CATEGORY_PRIORITY = { custom: 0, token: 1, privatekey: 2, assignment: 3, pii: 4, infra: 5, generic: 6 };
+  const CATEGORY_PRIORITY = { user: 0, custom: 1, token: 2, privatekey: 3, assignment: 4, pii: 5, infra: 6, generic: 7 };
 
   // Sort by start; overlapping ranges are merged (extended), never dropped —
   // a partially-overlapping detection must not leave its tail unmasked.
@@ -166,8 +191,18 @@ const DlpEngine = (() => {
     return '*'.repeat(Math.max(4, Math.min(n, STAR_CAP)));
   }
 
+  function affixMask(hidden) {
+    if (hidden.includes('\n')) return starRun(hidden.length);
+    // keep up to 4 chars each side, but never reveal more than half the value
+    // and always leave at least 3 stars in the middle
+    const keep = Math.min(4, Math.floor((hidden.length - 3) / 2));
+    if (keep < 2) return starRun(hidden.length);
+    return hidden.slice(0, keep) + starRun(hidden.length - 2 * keep) + hidden.slice(-keep);
+  }
+
   function maskValue(hidden, category, maskOverride) {
     if (maskOverride === 'stars') return starRun(hidden.length);
+    if (maskOverride === 'affix') return affixMask(hidden);
     if (category === 'privatekey' && hidden.includes('\n')) {
       const lines = hidden.split('\n');
       let endIdx = -1;
@@ -184,7 +219,7 @@ const DlpEngine = (() => {
     // public pattern DB) — keep 4 chars each side so the user can tell WHICH
     // credential is hidden. Assignment values are arbitrary entropy: all stars.
     if (category === 'token' && hidden.length >= 16 && !hidden.includes('\n')) {
-      return hidden.slice(0, 4) + starRun(hidden.length - 8) + hidden.slice(-4);
+      return affixMask(hidden);
     }
     return starRun(hidden.length);
   }
