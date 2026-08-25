@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    width: 300px;
+    margin: 0;
+    font: 13px/1.45 system-ui, -apple-system, sans-serif;
+    background: #ffffff;
+    color: #1f2937;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { background: #1f2430; color: #e5e7eb; }
+    .row, .section { border-color: #374151 !important; }
+    .hint { color: #9ca3af !important; }
+  }
+  header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 12px 14px; background: #e02424; color: #fff;
+  }
+  header h1 { font-size: 14px; margin: 0; font-weight: 600; }
+  header .count {
+    margin-left: auto; background: rgba(255,255,255,.2);
+    border-radius: 10px; padding: 1px 8px; font-size: 12px;
+  }
+  .status {
+    padding: 8px 14px; font-size: 12px; font-weight: 500;
+  }
+  .status.ok      { background: #def7ec; color: #03543f; }
+  .status.warn    { background: #fdf6b2; color: #723b13; }
+  .status.off     { background: #f3f4f6; color: #6b7280; }
+  @media (prefers-color-scheme: dark) {
+    .status.ok   { background: #014737; color: #84e1bc; }
+    .status.warn { background: #633112; color: #fce96a; }
+    .status.off  { background: #374151; color: #9ca3af; }
+  }
+  .section { padding: 6px 14px 10px; border-bottom: 1px solid #e5e7eb; }
+  .section h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+    color: #6b7280; margin: 8px 0 4px; font-weight: 600;
+  }
+  .row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 5px 0;
+  }
+  .row label { flex: 1; cursor: pointer; }
+  .hint { font-size: 11px; color: #6b7280; margin: 2px 0 0; }
+  input[type="checkbox"] { accent-color: #e02424; width: 15px; height: 15px; cursor: pointer; }
+  footer {
+    padding: 8px 14px; font-size: 11px; color: #6b7280; text-align: center;
+  }
+</style>
+</head>
+<body>
+  <header>
+    <span>🛡️</span>
+    <h1>DLP Guard</h1>
+    <span class="count" id="count">0</span>
+  </header>
+
+  <div class="status off" id="status">Loading…</div>
+
+  <div class="section">
+    <div class="row">
+      <label for="enabled"><strong>Protection enabled</strong></label>
+      <input type="checkbox" id="enabled">
+    </div>
+    <div class="row">
+      <label for="site" id="siteLabel">Enable on this site</label>
+      <input type="checkbox" id="site">
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Features</h2>
+    <div class="row">
+      <label for="maskOnPage">Hide secrets on pages</label>
+      <input type="checkbox" id="maskOnPage">
+    </div>
+    <div class="row">
+      <label for="redactPaste">Redact secrets on paste</label>
+      <input type="checkbox" id="redactPaste">
+    </div>
+    <div class="row">
+      <label for="revealOnClick">Click a chip to reveal</label>
+      <input type="checkbox" id="revealOnClick">
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Detections</h2>
+    <div class="row">
+      <label for="catToken">API keys &amp; tokens</label>
+      <input type="checkbox" id="catToken">
+    </div>
+    <div class="row">
+      <label for="catAssignment">key = value assignments</label>
+      <input type="checkbox" id="catAssignment">
+    </div>
+    <div class="row">
+      <label for="catPrivatekey">Private key blocks</label>
+      <input type="checkbox" id="catPrivatekey">
+    </div>
+    <div class="row">
+      <label for="catInfra">Cloud endpoints <span class="hint">(noisy)</span></label>
+      <input type="checkbox" id="catInfra">
+    </div>
+    <div class="row">
+      <label for="catGeneric">Generic URLs/UUIDs <span class="hint">(very noisy)</span></label>
+      <input type="checkbox" id="catGeneric">
+    </div>
+  </div>
+
+  <footer>100% local · never active on login pages</footer>
+  <script src="src/popup.js"></script>
+</body>
+</html>
