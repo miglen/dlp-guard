@@ -386,6 +386,24 @@ WRuPspPXIAHPKrjEHkUsgDZHW/V0fJWbIjJarw==
   DlpEngine.compile(CATS);
 }
 
+// ── 15f. edited/user assignment patterns bypass the shipped-keyword prefilter ─
+{
+  const CATS = { token: true, assignment: true, privatekey: true, custom: true, user: true, pii: false, infra: false, generic: false };
+  // a user pattern in the 'assignment' category with a keyword the shipped
+  // prefilter has never seen must still fire (text has no shipped keyword)
+  DlpEngine.compile(CATS, [], [
+    { id: 'a1', label: 'ZONK', category: 'assignment', source: '(?<![A-Za-z0-9_])zonktoken\\s*[:=]\\s*([A-Za-z0-9]{6,})', flags: 'gid', valueGroup: 1, mask: 'stars', enabled: true },
+  ]);
+  const r = DlpEngine.findRanges('config zonktoken: abcdef123456 end');
+  expect('user assignment pattern not gated by shipped prefilter', r.length === 1, JSON.stringify(r));
+  // an edited built-in assignment whose keyword changed must also fire
+  const b = DlpEngine.builtins().find((x) => x.category === 'assignment');
+  DlpEngine.compile(CATS, [], [], [{ id: b.id, source: '(?<![A-Za-z0-9_])wobblekey\\s*[:=]\\s*([A-Za-z0-9]{6,})', flags: 'gid' }]);
+  const r2 = DlpEngine.findRanges('x wobblekey= zzzzzz99 y');
+  expect('edited assignment builtin not gated by prefilter', r2.length === 1, JSON.stringify(r2));
+  DlpEngine.compile(CATS);
+}
+
 // ── 16. exfiltration threshold sanity (engine side) ───────────────────────────
 {
   const bulk = Array.from({ length: 12 }, (_, i) => `key${i}: AKIAIOSFODNN7EXAMPL${i % 10}`).join('\n');

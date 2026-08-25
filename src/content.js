@@ -100,15 +100,22 @@
   function isCloudEditor() {
     if (!STATE.skipCloudEditors) return false;
     const h = location.hostname;
+    const p = location.pathname;
     if (/(^|\.)docs\.google\.com$/.test(h)) return true;                 // Google Workspace
-    if (/(^|\.)(officeapps\.live\.com|office\.com|office365\.com|sharepoint\.com|onedrive\.live\.com)$/.test(h)) return true; // Microsoft 365 / SharePoint / OneDrive
-    if (/(^|\.)(word|excel|powerpoint|onenote)\.office\.com$/.test(h)) return true;
+    // Microsoft 365 document editors — NOT webmail. outlook.* is excluded so
+    // DLP protection stays on for Outlook Web (a primary exfiltration channel).
+    if (/^outlook\./.test(h)) return false;
+    if (/(^|\.)officeapps\.live\.com$/.test(h)) return true;             // Office web apps
+    if (/(^|\.)(word|excel|powerpoint|onenote)\.office(365)?\.com$/.test(h)) return true;
+    if (/(^|\.)sharepoint\.com$/.test(h)) return true;                    // SharePoint
+    if (/(^|\.)onedrive\.live\.com$/.test(h)) return true;                // OneDrive
     if (/(^|\.)notion\.so$/.test(h) || /(^|\.)notion\.site$/.test(h)) return true; // Notion
     if (/(^|\.)quip\.com$/.test(h)) return true;                          // Quip
-    if (/(^|\.)dropbox\.com$/.test(h) && /\/(paper|scl)\//.test(location.pathname)) return true; // Dropbox Paper
+    if (/(^|\.)paper\.dropbox\.com$/.test(h) || (/(^|\.)dropbox\.com$/.test(h) && /^\/paper\//.test(p))) return true; // Dropbox Paper only
     if (/(^|\.)(coda\.io)$/.test(h)) return true;                         // Coda
-    if (/(^|\.)(zoho|zohopublic)\.(com|eu|in)$/.test(h) && /(writer|sheet|show)/.test(location.pathname + location.hostname)) return true; // Zoho
-    if (/(^|\.)(confluence|atlassian)\.net$/.test(h)) return true;        // Confluence
+    if (/(^|\.)(zoho|zohopublic)\.(com|eu|in)$/.test(h) && /(writer|sheet|show)/.test(p + h)) return true; // Zoho editors
+    if (/(^|\.)atlassian\.net$/.test(h) && /^\/wiki\//.test(p)) return true; // Confluence only (Jira stays protected)
+    if (/(^|\.)confluence\.[a-z.]+$/.test(h)) return true;                // self-hosted Confluence
     return false;
   }
   // kept name for existing call sites

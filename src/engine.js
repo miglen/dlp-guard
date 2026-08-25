@@ -61,17 +61,23 @@ const DlpEngine = (() => {
       if (ov && ov.disabled) continue;
       const source = ov && ov.source ? ov.source : p.source;
       const flags = ov && ov.flags ? ov.flags : p.flags;
+      // an edited source may no longer contain the original literal; keep the
+      // gate only if the new source still contains it, else drop it
+      const edited = Boolean(ov && ov.source);
+      let lit = p.lit || null;
+      if (edited) lit = (lit && source.toLowerCase().includes(lit)) ? lit : null;
       try {
         compiled.push({
           re: new RegExp(source, flags),
           label: p.label,
           category: p.category,
           valueGroup: p.valueGroup,
-          // an edited source may no longer contain the original literal — only
-          // keep the gate when the source is unchanged
-          lit: (ov && ov.source) ? null : (p.lit || null),
+          lit,
           validate: typeof p.validate === 'function' ? p.validate : null,
           mask: p.mask || null, // per-pattern mask-style override ('stars')
+          // edited assignment patterns must not be gated by the shared
+          // shipped-keyword prefilter (their keyword may have changed)
+          overridden: edited,
         });
       } catch (_e) {
         // A pattern this browser build can't compile is skipped, never fatal.
@@ -123,6 +129,7 @@ const DlpEngine = (() => {
             lit: null,
             validate: null,
             mask: up.mask === 'affix' ? 'affix' : 'stars',
+            user: true, // never gated by the shipped-keyword assignment prefilter
           });
         } catch (_e) { /* skip unusable user pattern */ }
       }
@@ -160,7 +167,10 @@ const DlpEngine = (() => {
 
     const ranges = [];
     for (const p of compiled) {
-      if (p.category === 'assignment' && !runAssignments) continue;
+      // The shared assignment prefilter only knows the SHIPPED keywords, so it
+      // must not gate an edited assignment built-in (or a user pattern in the
+      // 'assignment' category) whose keyword it never saw.
+      if (p.category === 'assignment' && !runAssignments && !p.overridden && !p.user) continue;
       // literal gate (any category): a pattern whose required literal is
       // absent can't match — indexOf is far cheaper than a regex scan
       if (p.lit && lower().indexOf(p.lit) === -1) continue;

@@ -68,5 +68,19 @@ eq('edited: cats', p.dlp_cats, { token: false, pii: true });
 eq('edited: terms', p.dlp_customTerms, ['Foo', 'Bar: baz', 'projekt-x']);
 eq('edited: number', p.dlp_exfilThreshold, 12);
 
+// escaped quotes + '#' inside strings must not truncate (stripComment bug)
+roundtrip('quote then hash', { dlp_customTerms: ['Acme "Q3 #roadmap', 'a"b"c"d #e', 'plain # x'] });
+// quoted scalar containing ": " must stay a string, not become a mapping
+roundtrip('colon-space in quoted scalar', { dlp_customTerms: ['label": value', 'a": b'] });
+// regex source with quotes/backslash/hash
+roundtrip('regex with quote-hash', { dlp_userPatterns: [{ id: 'r', label: 'X', source: '["]\\s+ #note', flags: 'g', valueGroup: 0, mask: 'stars', enabled: true }] });
+
+// tab indentation must throw, not silently collapse
+{
+  let threw = false;
+  try { Y.parse('dlp_cats:\n\ttoken: true\n'); } catch (_e) { threw = true; }
+  eq('tab indent throws', threw, true);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

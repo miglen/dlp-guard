@@ -21,11 +21,15 @@ function setStatus(cls, text) {
 
 function loadSettings() {
   chrome.storage.local.get(DEFAULTS, (items) => {
-    $('enabled').checked = items.dlp_enabled !== false;
-    $('maskOnPage').checked = items.dlp_maskOnPage !== false;
-    $('redactPaste').checked = items.dlp_redactPaste !== false;
+    // never repaint the control the user is actively toggling — an in-flight
+    // read can otherwise revert a just-changed checkbox
+    const active = document.activeElement;
+    const set = (id, val) => { if ($(id) !== active) $(id).checked = val; };
+    set('enabled', items.dlp_enabled !== false);
+    set('maskOnPage', items.dlp_maskOnPage !== false);
+    set('redactPaste', items.dlp_redactPaste !== false);
     disabledSites = Array.isArray(items.dlp_disabledSites) ? items.dlp_disabledSites : [];
-    if (currentHostname) $('site').checked = !disabledSites.includes(currentHostname);
+    if (currentHostname) set('site', !disabledSites.includes(currentHostname));
   });
   chrome.storage.local.get({ dlp_bypassCount: 0, dlp_revealCount: 0, dlp_exfilBlocked: 0 }, (s) => {
     const total = s.dlp_bypassCount + s.dlp_revealCount + s.dlp_exfilBlocked;
@@ -91,7 +95,12 @@ $('openOptions').addEventListener('click', () => {
   else window.open(chrome.runtime.getURL('options.html'));
 });
 
+// Refresh settings/stats reactively rather than by polling, so a poll can't
+// land between a local toggle and its persisted write and revert the control.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && Object.keys(changes).some((k) => k.startsWith('dlp_'))) loadSettings();
+});
+
 loadSettings();
 queryTab();
-setInterval(queryTab, 1500);
-setInterval(loadSettings, 1500);
+setInterval(queryTab, 1500); // live status/count only (never writes the toggles' storage)

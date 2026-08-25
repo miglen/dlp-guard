@@ -130,9 +130,16 @@ const DlpYaml = (() => {
   // Tokenize into {indent, raw} lines, dropping blanks and comments.
   function tokenize(text) {
     const out = [];
+    let lineNo = 0;
     for (const rawLine of text.split('\n')) {
+      lineNo++;
       const noComment = stripComment(rawLine);
       if (noComment.trim() === '') continue;
+      // YAML forbids tab indentation; measuring it as 0 would silently collapse
+      // the structure, so fail loudly instead of misparsing.
+      if (/^\t/.test(noComment) || /^ *\t/.test(noComment.match(/^\s*/)[0])) {
+        throw new Error(`tab used for indentation on line ${lineNo} — use spaces`);
+      }
       const indent = noComment.match(/^ */)[0].length;
       out.push({ indent, raw: noComment.trim() });
     }
@@ -143,6 +150,7 @@ const DlpYaml = (() => {
     let inS = false, inD = false;
     for (let i = 0; i < line.length; i++) {
       const c = line[i];
+      if (inD && c === '\\') { i++; continue; } // skip escaped char inside "..."
       if (c === '"' && !inS) inD = !inD;
       else if (c === "'" && !inD) inS = !inS;
       else if (c === '#' && !inS && !inD && (i === 0 || /\s/.test(line[i - 1]))) return line.slice(0, i);
@@ -156,6 +164,7 @@ const DlpYaml = (() => {
     let inD = false, inS = false;
     for (let i = 0; i < s.length; i++) {
       const c = s[i];
+      if (inD && c === '\\') { i++; continue; } // skip escaped char inside "..."
       if (c === '"' && !inS) inD = !inD;
       else if (c === "'" && !inD) inS = !inS;
       else if (c === ':' && !inD && !inS && (i + 1 >= s.length || /\s/.test(s[i + 1]))) return true;

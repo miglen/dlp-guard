@@ -529,7 +529,8 @@ function renderLog(log) {
 }
 
 $('clearStatsBtn').addEventListener('click', () => {
-  chrome.storage.local.set({ dlp_bypassCount: 0, dlp_revealCount: 0, dlp_exfilBlocked: 0 }, () => { loadStats(); banner('Counters reset.'); });
+  // clear the graph history too, so it stays consistent with the counters
+  chrome.storage.local.set({ dlp_bypassCount: 0, dlp_revealCount: 0, dlp_exfilBlocked: 0, dlp_dailyStats: {} }, () => { loadStats(); banner('Counters reset.'); });
 });
 $('clearLogBtn').addEventListener('click', () => {
   chrome.storage.local.set({ dlp_bypassLog: [] }, () => { loadStats(); banner('Log cleared.'); });
@@ -577,11 +578,17 @@ function overridesFromBuiltins(list) {
     const ov = { id: b.id };
     let changed = false;
     if (b.enabled === false) { ov.disabled = true; changed = true; }
-    if (b.source && b.source !== p.source) {
+    const srcChanged = b.source && b.source !== p.source;
+    if (srcChanged) {
       try { new RegExp(b.source, b.flags || 'g'); } catch (_e) { continue; }
       if (redosLint(b.source)) continue;
       ov.source = b.source; changed = true;
-      if (b.flags && b.flags !== p.flags) ov.flags = b.flags;
+    }
+    // capture a flags change independently of the source change — a flags-only
+    // edit (e.g. adding 'i') must survive an export→import round-trip too
+    if (b.flags && b.flags !== p.flags) {
+      const effSrc = srcChanged ? b.source : p.source;
+      try { new RegExp(effSrc, b.flags); ov.flags = b.flags; changed = true; } catch (_e) { /* keep original flags */ }
     }
     if (changed) overrides.push(ov);
   }
@@ -662,8 +669,8 @@ $('resetBtn').addEventListener('click', () => {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
   if (Object.keys(changes).some((k) => k.startsWith('dlp_'))) {
-    // don't reload while the user is typing in an editor field
-    if (!/rx|terms|import|site|bi/i.test(document.activeElement?.id || '')) loadAll();
+    // don't reload while the user is typing in an editor field (ids: px*, terms*, import*, site*)
+    if (!/^(px|terms|import|site)/i.test(document.activeElement?.id || '')) loadAll();
     else loadStats();
   }
 });

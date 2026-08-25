@@ -24,7 +24,11 @@ const PageGuard = (() => {
   function urlLooksLikeAuth() {
     try {
       if (AUTH_HOST_RE.test(location.hostname)) return true;
-      if (AUTH_PATH_RE.test(location.pathname + location.search + location.hash)) return true;
+      // Deliberately exclude location.hash: a page can set its own hash
+      // (location.hash = '#login') to force suspension and disable redaction.
+      // The path+query still change via pushState, but that at least requires
+      // a real navigation-shaped URL rather than a trivially settable fragment.
+      if (AUTH_PATH_RE.test(location.pathname + location.search)) return true;
     } catch (_e) { /* detached frame */ }
     return false;
   }
