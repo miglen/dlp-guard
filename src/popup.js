@@ -38,6 +38,10 @@ function loadSettings() {
       $('site').checked = !disabledSites.includes(currentHostname);
     }
   });
+  chrome.storage.local.get({ dlp_bypassCount: 0, dlp_revealCount: 0 }, (s) => {
+    $('bypassCount').textContent = String(s.dlp_bypassCount);
+    $('revealCount').textContent = String(s.dlp_revealCount);
+  });
 }
 
 function queryTab() {

@@ -140,7 +140,56 @@ for (const [name, text] of negatives) {
   expect('trimmed assignment base matches', r.length === 1, JSON.stringify(r));
 }
 
-// ── 11. page guard URL matrix ─────────────────────────────────────────────────
+// ── 11. private key blocks are hidden in full, not just the header ───────────
+{
+  const pem = `-----BEGIN RSA PRIVATE KEY-----
+MIIBOAIBAAJARsF2wfXtjllRR8nnz8+CLULn0bqgZtYktJB2BdcB5bw6OYmmDVCc
+TeTC3VXZATdSqNA6WDWCkSVinC05uYEOEwIDAQABAkArUAaYmSkAeKCO54Pl7Ert
+1gT+l9XU3cW+WqhEzuc0cC4Eiqe9phpdiQXNosI60a8YyeyBUjCtQGFwbJ1Kl8Hh
+AiEAioOWu1s5nbB6ioOXdhbW4Ov5xfI62TYJNxdz656/njsCIQCCxRfwRVfDcC0h
+aKMjV5PzfUUCIHX2s4yEERJ1K9EVwfE/5bH1E+TERb3j21UZZphjGv15AiBBs0w5
+WRuPspPXIAHPKrjEHkUsgDZHW/V0fJWbIjJarw==
+-----END RSA PRIVATE KEY-----`;
+  const ranges = DlpEngine.findRanges(pem);
+  expect('pem single merged range', ranges.length === 1, JSON.stringify(ranges));
+  if (ranges.length === 1) {
+    expect('pem covers whole block', ranges[0].start === 0 && ranges[0].end === pem.length,
+      `covered [${ranges[0].start},${ranges[0].end}] of ${pem.length}`);
+  }
+  const { text } = DlpEngine.redactString('context before\n' + pem + '\nafter');
+  expect('pem body never survives redaction', !/MIIBOA|AiEAio|WRuPsp/.test(text), text.slice(0, 200));
+  expect('pem surroundings survive', text.startsWith('context before') && text.endsWith('after'), '');
+
+  // other key types, including EC (covered only by the repaired generic pattern)
+  for (const kind of ['OPENSSH', 'EC', 'DSA']) {
+    const block = `-----BEGIN ${kind} PRIVATE KEY-----\nb3BlbnNzaEtFWWZha2U=\nZmFrZWJvZHlmYWtlYm9keQ==\n-----END ${kind} PRIVATE KEY-----`;
+    const r = DlpEngine.findRanges(block);
+    const full = r.length >= 1 && r[0].start === 0 && r[r.length - 1].end === block.length;
+    expect(`${kind} key block fully covered`, full, JSON.stringify(r));
+  }
+
+  // adversarial: header followed by dash floods must stay fast and bounded
+  const t0 = performance.now();
+  DlpEngine.findRanges('-----BEGIN RSA PRIVATE KEY-----' + '-'.repeat(20000));
+  expect('pem dash-flood under 200ms', performance.now() - t0 < 200, '');
+
+  // a 5+ dash run INSIDE the body must not truncate the block
+  const inner = '-----BEGIN RSA PRIVATE KEY-----\nZmFrZQ==\n------ inner dashes ------\nc2VjcmV0Ym9keQ==\n-----END RSA PRIVATE KEY-----';
+  const ri = DlpEngine.findRanges(inner);
+  expect('inner dash run stays inside block',
+    ri.length === 1 && ri[0].start === 0 && ri[0].end === inner.length, JSON.stringify(ri));
+
+  // two blocks in one text node: the first match must not swallow the second header
+  const two = '-----BEGIN RSA PRIVATE KEY-----\nYWFh\n-----END RSA PRIVATE KEY-----\nplain text between\n-----BEGIN EC PRIVATE KEY-----\nYmJi\n-----END EC PRIVATE KEY-----';
+  const rt = DlpEngine.findRanges(two);
+  const covered2 = rt.length >= 1 &&
+    !rt.some((r) => two.slice(r.start, r.end).includes('plain text between')) &&
+    rt.some((r) => two.slice(r.start, r.end).includes('YWFh')) &&
+    rt.some((r) => two.slice(r.start, r.end).includes('YmJi'));
+  expect('two blocks are separate matches, text between stays visible', covered2, JSON.stringify(rt));
+}
+
+// ── 12. page guard URL matrix ─────────────────────────────────────────────────
 {
   const guardCode = src('pageguard.js');
   function guardFor(hostname, pathname) {

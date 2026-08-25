@@ -33,8 +33,14 @@ mailgun: key-abcdef0123456789abcdef0123456789
 
   <h2>3. JWT and private key</h2>
   <p>Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N65N65cp6GSdC1fCzX2 in a header.</p>
+  <p class="note">The ENTIRE key block below (header, body, footer) must collapse into
+  one pill like “🔒 RSA · 8 lines hidden”:</p>
   <pre>-----BEGIN RSA PRIVATE KEY-----
-MIIEpAIBAAKCAQEA7bq7s8...fake...
+MIIBOAIBAAJARsF2wfXtjllRR8nnz8+CLULn0bqgZtYktJB2BdcB5bw6OYmmDVCc
+TeTC3VXZATdSqNA6WDWCkSVinC05uYEOEwIDAQABAkArUAaYmSkAeKCO54Pl7Ert
+1gT+l9XU3cW+WqhEzuc0cC4Eiqe9phpdiQXNosI60a8YyeyBUjCtQGFwbJ1Kl8Hh
+AiEAioOWu1s5nbB6ioOXdhbW4Ov5xfI62TYJNxdz656/njsCIQCCxRfwRVfDcC0h
+WRuPspPXIAHPKrjEHkUsgDZHW/V0fJWbIjJarw==
 -----END RSA PRIVATE KEY-----</pre>
 
   <h2>4. Should NOT be masked (false-positive check)</h2>
@@ -47,9 +53,11 @@ MIIEpAIBAAKCAQEA7bq7s8...fake...
   it must get masked too (tests the MutationObserver).</p>
   <div id="dynamic"></div>
 
-  <h2>6. Paste redaction</h2>
+  <h2>6. Paste redaction + bypass</h2>
   <p class="note">Copy this line, then paste it into the box —
-  the key must arrive as [HIDDEN_…]:</p>
+  the key must arrive as [HIDDEN_…]. The toast offers <b>Paste original</b>;
+  clicking it swaps the real value back in and increments the bypass counter
+  (see popup → Bypass stats):</p>
   <pre>please debug: AKIAIOSFODNN7EXAMPLE and twilio SKabcdef0123456789abcdef0123456789</pre>
   <textarea placeholder="Paste here…"></textarea>
   <div contenteditable="true" style="border:1px solid #ccc; border-radius:6px; min-height:60px; padding:8px;"

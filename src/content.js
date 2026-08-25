@@ -76,8 +76,11 @@
     }
   });
 
+  const SETTINGS_KEYS = Object.keys(DEFAULTS);
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
+    // Stats/log writes (bypass counters) must not trigger an unmask+rescan.
+    if (!SETTINGS_KEYS.some((k) => k in changes)) return;
     chrome.storage.local.get(DEFAULTS, (items) => {
       applySettings(items);
       // Settings changed: start from a clean slate, then re-mask if active.
@@ -128,21 +131,32 @@
     style.id = 'dlpg-style';
     style.textContent = `
       [${MASK_ATTR}] {
+        display: inline-block;
         background: #fde8e8;
-        border: 1px solid #e02424;
-        color: #771d1d;
-        border-radius: 4px;
-        padding: 0 5px;
-        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-        font-size: 0.85em;
+        border: 1px solid #f3b1b1;
+        color: #9b1c1c;
+        border-radius: 999px;
+        padding: 1px 10px;
+        font-family: system-ui, -apple-system, sans-serif;
+        font-size: 0.82em;
+        font-weight: 500;
+        line-height: 1.5;
         cursor: pointer;
         user-select: none;
         white-space: nowrap;
+        vertical-align: baseline;
       }
+      [${MASK_ATTR}]:hover { border-color: #e02424; }
       [${MASK_ATTR}][data-dlpg-revealed] {
+        display: inline;
         background: #fdf6b2;
         border-color: #c27803;
         color: #633112;
+        border-radius: 4px;
+        padding: 0 3px;
+        font-family: inherit;
+        font-size: inherit;
+        font-weight: inherit;
         user-select: text;
         white-space: pre-wrap;
       }
@@ -150,8 +164,13 @@
     (document.head || document.documentElement).appendChild(style);
   }
 
-  function maskChipText(label) {
-    return `••••• ${label} •••••`;
+  // Collapsed-pill text, like Claude's "[Pasted text +N lines]" chips:
+  // the chip says what is hidden and how much, never the content itself.
+  function maskChipText(label, hidden) {
+    const lines = hidden ? hidden.replace(/\n+$/, '').split('\n').length : 1;
+    if (lines > 1) return `🔒 ${label} · ${lines} lines hidden`;
+    if (hidden && hidden.length > 24) return `🔒 ${label} · ${hidden.length} chars hidden`;
+    return `🔒 ${label} hidden`;
   }
 
   function shouldSkipNode(textNode) {
@@ -193,9 +212,10 @@
       }
       const span = document.createElement('span');
       span.setAttribute(MASK_ATTR, r.label);
-      span.textContent = maskChipText(r.label);
+      const hidden = text.slice(r.start, r.end);
+      span.textContent = maskChipText(r.label, hidden);
       span.title = 'Secret hidden by DLP Guard' + (STATE.revealOnClick ? ' — click to reveal' : '');
-      originals.set(span, text.slice(r.start, r.end));
+      originals.set(span, hidden);
       frag.appendChild(span);
       pos = r.end;
       STATE.maskCount++;
@@ -225,6 +245,9 @@
 
   // Click a chip → reveal; click again → hide. Delegated, capture phase.
   // isTrusted: page scripts must not be able to force-reveal via synthetic clicks.
+  // Dedupe reveal counting by VALUE, not by span — rescans rebuild spans, and
+  // re-revealing the same secret after a settings change is not a new bypass.
+  const revealedValues = new Set();
   document.addEventListener('click', (ev) => {
     if (!ev.isTrusted || !STATE.revealOnClick) return;
     const span = ev.target instanceof Element ? ev.target.closest(`[${MASK_ATTR}]`) : null;
@@ -233,10 +256,15 @@
     ev.stopPropagation();
     if (span.hasAttribute('data-dlpg-revealed')) {
       span.removeAttribute('data-dlpg-revealed');
-      span.textContent = maskChipText(span.getAttribute(MASK_ATTR));
+      span.textContent = maskChipText(span.getAttribute(MASK_ATTR), originals.get(span));
     } else {
       span.setAttribute('data-dlpg-revealed', '1');
-      span.textContent = originals.get(span);
+      const val = originals.get(span);
+      span.textContent = val;
+      if (!revealedValues.has(val)) {
+        revealedValues.add(val);
+        reportBypass('reveal', 1);
+      }
     }
   }, true);
 
@@ -356,9 +384,20 @@
     return root;
   }
 
+  /** Last redacted paste, kept so the user can deliberately bypass it.
+   *  Cleared when the offer toast goes away. */
+  let lastPaste = null; // { editable, raw, sanitized, count }
+  /** Armed bypass: content-bound — only a re-paste of EXACTLY this text,
+   *  within the window, goes through as the original. */
+  let armed = null; // { raw, count, until }
+
   // Registered on window in the capture phase at document_start, so it runs
   // before any page-registered paste listener can read the raw clipboard.
   window.addEventListener('paste', (event) => {
+    // Synthetic paste events carry page-authored data and never run the
+    // browser's default insertion — ignore them entirely (they must not be
+    // able to consume the armed bypass or pop misleading toasts).
+    if (!event.isTrusted) return;
     if (!STATE.ready || !STATE.enabled || !STATE.redactPaste || siteDisabled()) return;
     // Re-check the guard synchronously — a login modal may have appeared
     // within the observer debounce window, or a password field may currently
@@ -372,6 +411,20 @@
 
     const raw = event.clipboardData?.getData('text');
     if (!raw) return;
+
+    // Armed bypass consumption: same text, within the window. Even then the
+    // event is cancelled and WE insert — page paste listeners never see it.
+    if (armed && Date.now() < armed.until && raw === armed.raw) {
+      const count = armed.count;
+      armed = null;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      insertText(editable, raw);
+      reportBypass('paste', count);
+      showToast('original pasted — bypass recorded');
+      return;
+    }
+
     const { text: sanitized, count } = DlpEngine.redactString(raw);
     if (count === 0) return;
 
@@ -381,8 +434,81 @@
     STATE.pasteCount += count;
     console.info(`${LOG_PREFIX} redacted ${count} secret(s) from paste.`);
     reportCount();
-    showToast(`${count} secret${count > 1 ? 's' : ''} redacted from paste`);
+    showToast(`${count} secret${count > 1 ? 's' : ''} redacted from paste`, {
+      actionLabel: 'Paste original',
+      onAction: bypassLastPaste,
+    });
+    // Set AFTER showToast — showing a new toast clears any previous offer.
+    lastPaste = { editable, raw, sanitized, count };
   }, true);
+
+  // Deliberate bypass: put the original clipboard text back in place of the
+  // sanitized insertion. Counted only when it actually happens (in-place
+  // replacement succeeds, or the armed re-paste is consumed).
+  function bypassLastPaste() {
+    const lp = lastPaste;
+    if (!lp) return;
+    lastPaste = null;
+    const { editable, raw, sanitized, count } = lp;
+
+    if (editable.isConnected &&
+        (editable instanceof HTMLInputElement || editable instanceof HTMLTextAreaElement)) {
+      try {
+        const idx = editable.value.lastIndexOf(sanitized);
+        if (idx !== -1) {
+          editable.focus();
+          editable.setSelectionRange(idx, idx + sanitized.length);
+          if (!safeExecInsert(raw)) {
+            editable.setRangeText(raw, idx, idx + sanitized.length, 'end');
+            editable.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+          reportBypass('paste', count);
+          return;
+        }
+      } catch (_e) { /* email/number inputs have no selection API */ }
+    } else if (editable.isConnected) {
+      // contenteditable: extend the selection backwards over the sanitized
+      // text. modify() steps by grapheme, not code unit, so step until the
+      // selected string is long enough, then require exact equality.
+      editable.focus();
+      const sel = window.getSelection();
+      const canWalk = sel && sel.rangeCount > 0 && sel.isCollapsed &&
+        editable.contains(sel.anchorNode) &&
+        typeof sel.modify === 'function' && sanitized.length <= 5000;
+      if (canWalk) {
+        let steps = 0;
+        while (sel.toString().length < sanitized.length && steps < sanitized.length + 16) {
+          sel.modify('extend', 'backward', 'character');
+          steps++;
+        }
+        if (sel.toString() === sanitized && safeExecInsert(raw)) {
+          reportBypass('paste', count);
+          return;
+        }
+        sel.collapseToEnd();
+      }
+    }
+    // In-place replacement not possible — arm a one-shot, content-bound
+    // re-paste window instead.
+    armed = { raw, count, until: Date.now() + 15000 };
+    showToast('press Ctrl/Cmd+V again to paste the original (15s)');
+  }
+
+  function safeExecInsert(text) {
+    try { return document.execCommand('insertText', false, text); }
+    catch (_e) { return false; }
+  }
+
+  function reportBypass(kind, secrets) {
+    try {
+      chrome.runtime.sendMessage({
+        type: 'DLP_BYPASS',
+        kind,
+        secrets: secrets | 0,
+        host: location.hostname,
+      });
+    } catch (_e) { /* extension reloaded */ }
+  }
 
   function insertText(editable, text) {
     // execCommand routes through the editing pipeline, so React/ProseMirror
@@ -445,21 +571,72 @@
 
   // ── Toast ──────────────────────────────────────────────────────────────────
 
-  function showToast(message) {
-    const toast = document.createElement('div');
-    toast.setAttribute('role', 'status');
-    toast.style.cssText = [
-      'position:fixed', 'top:16px', 'right:16px', 'z-index:2147483647',
+  // The toast renders inside a CLOSED shadow root so page scripts cannot
+  // reach or restyle the bypass button. Clicks are additionally verified by
+  // geometry (a legit toast button is small and sits top-right) so a page
+  // that moves/scales the host cannot clickjack a trusted click into a bypass.
+  let activeToast = null; // { host, timer, hadAction }
+  function dismissToast() {
+    if (!activeToast) return;
+    clearTimeout(activeToast.timer);
+    activeToast.host.remove();
+    if (activeToast.hadAction) lastPaste = null; // offer expired with the toast
+    activeToast = null;
+  }
+
+  function showToast(message, action) {
+    dismissToast();
+    const host = document.createElement('div');
+    host.style.cssText = 'position:fixed;top:16px;right:16px;z-index:2147483647;';
+    const root = host.attachShadow({ mode: 'closed' });
+    const box = document.createElement('div');
+    box.setAttribute('role', 'status');
+    box.style.cssText = [
+      'display:flex', 'align-items:center', 'gap:10px',
       'background:#fde8e8', 'border:1px solid #e02424', 'color:#771d1d',
       'padding:10px 14px', 'border-radius:8px',
-      'font:500 13px system-ui,sans-serif', 'max-width:340px',
+      'font:500 13px system-ui,sans-serif', 'max-width:380px',
       'box-shadow:0 4px 12px rgba(0,0,0,.15)', 'transition:opacity .3s',
     ].join(';');
-    toast.textContent = `🛡️ DLP Guard — ${message}`;
-    (document.body || document.documentElement).appendChild(toast);
-    setTimeout(() => {
-      toast.style.opacity = '0';
-      setTimeout(() => toast.remove(), 350);
-    }, 3500);
+    const text = document.createElement('span');
+    text.textContent = `🛡️ DLP Guard — ${message}`;
+    box.appendChild(text);
+    if (action) {
+      const btn = document.createElement('button');
+      btn.textContent = action.actionLabel;
+      btn.style.cssText = [
+        'background:#e02424', 'color:#fff', 'border:none', 'border-radius:6px',
+        'padding:5px 10px', 'font:600 12px system-ui,sans-serif',
+        'cursor:pointer', 'white-space:nowrap', 'flex-shrink:0',
+      ].join(';');
+      // preventDefault on mousedown keeps focus (and the caret) in the
+      // editable the paste went into — required for in-place replacement.
+      btn.addEventListener('mousedown', (e) => e.preventDefault());
+      btn.addEventListener('click', (e) => {
+        if (!e.isTrusted) return;
+        const r = btn.getBoundingClientRect();
+        const sane = r.width > 0 && r.width <= 320 && r.height <= 60 &&
+          r.top <= 120 && r.right >= window.innerWidth - 480;
+        if (!sane) return; // host was moved/scaled — likely clickjacking
+        const fn = action.onAction;
+        // Direct removal — dismissToast would clear lastPaste before fn runs.
+        clearTimeout(activeToast?.timer);
+        host.remove();
+        activeToast = null;
+        fn();
+      });
+      box.appendChild(btn);
+    }
+    root.appendChild(box);
+    (document.body || document.documentElement).appendChild(host);
+    const timer = setTimeout(() => {
+      box.style.opacity = '0';
+      setTimeout(() => {
+        // only dismiss if this toast is still the active one
+        if (activeToast && activeToast.host === host) dismissToast();
+        else host.remove();
+      }, 350);
+    }, action ? 8000 : 3500);
+    activeToast = { host, timer, hadAction: Boolean(action) };
   }
 })();

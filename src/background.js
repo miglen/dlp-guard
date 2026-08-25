@@ -30,6 +30,29 @@ function paintBadge(tabId, total) {
   if (total > 0) chrome.action.setBadgeBackgroundColor({ tabId, color: '#e02424' });
 }
 
+// Bypass bookkeeping: every deliberate bypass (paste-original or chip reveal)
+// increments a persistent counter and appends to a rolling audit log.
+// Only kind/host/count/time are recorded — never the secret values.
+const MAX_BYPASS_LOG = 200;
+let bypassQueue = Promise.resolve();
+function recordBypass(kind, host, secrets) {
+  bypassQueue = bypassQueue.then(async () => {
+    const items = await chrome.storage.local.get({
+      dlp_bypassCount: 0,
+      dlp_revealCount: 0,
+      dlp_bypassLog: [],
+    });
+    const update = {};
+    if (kind === 'paste') update.dlp_bypassCount = items.dlp_bypassCount + 1;
+    else update.dlp_revealCount = items.dlp_revealCount + 1;
+    const log = Array.isArray(items.dlp_bypassLog) ? items.dlp_bypassLog : [];
+    log.push({ t: Date.now(), kind, host: String(host || ''), secrets: secrets | 0 });
+    if (log.length > MAX_BYPASS_LOG) log.splice(0, log.length - MAX_BYPASS_LOG);
+    update.dlp_bypassLog = log;
+    await chrome.storage.local.set(update);
+  }).catch(() => {});
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'DLP_BADGE' && sender.tab?.id != null) {
     const tabId = sender.tab.id;
@@ -44,6 +67,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     withCounts((counts) => tabTotal(counts, message.tabId))
       .then((total) => sendResponse({ total: total ?? 0 }));
     return true; // async sendResponse
+  }
+  if (message?.type === 'DLP_BYPASS' && sender.tab?.id != null) {
+    recordBypass(message.kind === 'paste' ? 'paste' : 'reveal', message.host, message.secrets);
+    return false;
   }
   return false;
 });

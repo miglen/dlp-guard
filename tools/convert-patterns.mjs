@@ -86,6 +86,12 @@ const REPAIRS = new Map([
   // AWS ARN — greedy ".+" would swallow all text after the ARN; cap to ARN charset
   ['arn:aws:[a-z0-9-]+:[a-z]{2}-[a-z]+-[0-9]+:[0-9]+:.+',
    'arn:aws:[a-z0-9-]+:[a-z]{2}-[a-z]+-[0-9]+:[0-9]+:[A-Za-z0-9\\-_/:.*]+'],
+  // Combined BEGIN/END armor-marker pattern → BEGIN-only literal form, so it
+  // classifies as privatekey and gets the whole-block extension (covers
+  // EC/DSA keys the four dedicated header patterns miss). A lone END marker
+  // is not a secret, so dropping the END alternative loses nothing.
+  ['(?i)-----(?:(?:BEGIN|END) )(?:(?:EC|PGP|DSA|RSA|OPENSSH).)?PRIVATE.KEY(.BLOCK)?-----',
+   '(?i)-----BEGIN (?:(?:EC|PGP|DSA|RSA|OPENSSH) )?PRIVATE KEY( BLOCK)?-----'],
 ]);
 
 // Broken beyond repair, or duplicates of an already-working pattern.
@@ -98,7 +104,7 @@ const ASSIGNMENT_TAIL = /\(=\| =\|:\| :\)$/;
 
 // Hostname/endpoint discovery patterns — useful for recon tools, noisy for a
 // page-masking DLP. Shipped but default-disabled.
-const INFRA_NAME = /\b(api gateway|cloudfront|ec2|elb|elasticcache|rds|s3 (bucket|endpoint)|blob|digitalocean|trello url|possible urls)\b/i;
+const INFRA_NAME = /\b(api gateway|cloudfront|ec2|elb|elasticcache|rds|s3 (bucket|endpoint)|aws_s3|blob|digitalocean|trello url|possible urls)\b/i;
 
 // Catch-alls that would repaint half the internet. Default-disabled.
 const GENERIC_SOURCES = new Set([
@@ -196,10 +202,20 @@ for (const e of entries) {
   }
 
   let { src, flags } = toJsRegex(source);
-  if (category === 'infra' || category === 'generic') {
-    // Cap unbounded leading quantifiers — with a boundary wrap this turns the
-    // worst case from O(n²) into O(n·100).
-    src = src.replace(/^\[([^\]]+)\]\+/, '[$1]{1,100}');
+  // Cap unbounded leading class quantifiers (any category) — an uncapped
+  // leading [class]+/[class]* is O(n²) on runs of chars from that class;
+  // capping makes the worst case O(n·100).
+  src = src
+    .replace(/^\[([^\]]+)\]\+/, '[$1]{1,100}')
+    .replace(/^\[([^\]]+)\]\*/, '[$1]{0,100}');
+  if (category === 'privatekey') {
+    // The dataset patterns match only the "-----BEGIN …-----" header line.
+    // Extend them to swallow the whole block: body = anything up to the next
+    // real armor marker (tempered [\s\S] — a 5-dash run that is NOT a
+    // BEGIN/END marker stays inside the body), plus the END marker when
+    // present. A header with no footer swallows the rest of the text node —
+    // deliberate fail-closed behavior for key material.
+    src = `${src}(?:(?!-----(?:BEGIN|END))[\\s\\S])*(?:-----END[A-Za-z ]*-----)?`;
   }
   const bounded = addBoundaries(src);
   pushPattern(e.name, category, bounded, flags, 0);

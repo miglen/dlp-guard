@@ -20,8 +20,11 @@ DOM or to storage), and only *counts* are sent to the service worker for the bad
 ## Features
 
 - **Hide secrets on pages** — text nodes are scanned (initial sweep + MutationObserver
-  for SPA/streamed content) and matches are replaced with red `••••• LABEL •••••` chips.
-  Click a chip to reveal/re-hide (toggleable).
+  for SPA/streamed content) and matches collapse into compact pills, Claude-style:
+  `🔒 RSA · 8 lines hidden` for blocks, `🔒 AWS_CLIENT_ID hidden` for tokens.
+  Click a pill to expand/collapse (toggleable). Private key blocks
+  (`-----BEGIN … PRIVATE KEY-----` through the END marker, RSA/EC/DSA/OPENSSH/PGP/PKCS8)
+  are hidden in full — header, body, and footer.
 - **Redact on paste** — pasted text is scanned before insertion; secrets become
   `[HIDDEN_<TYPE>]`. Works in `<textarea>`, `<input>`, and contenteditable editors
   (ProseMirror/React chat inputs) via `execCommand('insertText')`. The listener is
@@ -44,11 +47,21 @@ DOM or to storage), and only *counts* are sent to the service worker for the bad
 - **Pattern categories** (toggle in popup):
   | Category | Count | Default | What |
   |---|---|---|---|
-  | API keys & tokens | 63 | on | Concrete formats: `AKIA…`, `xox…`, `sk_live_…`, JWT, … |
-  | key=value assignments | 688 | on | `api_key: <value>` — only the value is hidden |
-  | Private key blocks | 4 | on | `-----BEGIN … PRIVATE KEY-----` |
-  | Cloud endpoints | 12 | off | `*.cloudfront.net`, `*.elb.amazonaws.com`, … (noisy) |
+  | API keys & tokens | 61 | on | Concrete formats: `AKIA…`, `xox…`, `sk_live_…`, JWT, … |
+  | key=value assignments | 689 | on | `api_key: <value>` — only the value is hidden |
+  | Private key blocks | 5 | on | whole `-----BEGIN…-----END-----` armor blocks |
+  | Cloud endpoints | 12 | off | `*.cloudfront.net`, `*.s3.amazonaws.com`, … (noisy) |
   | Generic URLs/UUIDs | 4 | off | catch-alls (very noisy) |
+- **Deliberate bypass, always counted** — the redaction toast has a **Paste original**
+  button that swaps the real clipboard text back in. In-place replacement is tried
+  first; when the editor makes that impossible, a one-shot re-paste window (15 s) is
+  armed instead — bound to exactly the same clipboard text, and even that paste is
+  cancelled and inserted by the extension so page paste listeners never see the event.
+  The toast lives in a closed shadow root and bypass clicks are geometry-verified, so
+  page scripts can neither press the button nor clickjack it. Expanding a pill is also
+  a bypass. Both kinds are recorded: persistent counters plus a rolling 200-entry log
+  (`timestamp · hostname · kind · secret count` — never the values) in
+  `chrome.storage.local`; totals show in the popup under **Bypass stats**.
 - **Per-site disable** and a global kill switch in the popup; badge shows the number of
   secrets hidden/redacted on the current tab.
 
