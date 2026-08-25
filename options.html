@@ -115,7 +115,7 @@
       <div class="row"><label>Scan files before upload<span class="desc">Checks file attachments (file picker, drag-and-drop, paste)</span></label><input type="checkbox" data-setting="dlp_fileScanEnabled"></div>
       <div class="row"><label>Maximum file size to scan (KB)<span class="desc">Larger files are skipped unread</span></label><input type="number" min="1" max="102400" data-setting="dlp_fileMaxSizeKB" style="width:90px;"></div>
       <div style="margin-top:8px;">
-        <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px;">File extensions / names to scan (space or newline separated; empty = every text file under the size limit)</label>
+        <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px;">File extensions / names to scan (space or newline separated; empty = every text file under the size limit). Files with no extension — private keys, certs, dumps — are always scanned.</label>
         <textarea id="fileExts" rows="4" class="mono" style="width:100%;"></textarea>
         <div class="toolbar"><button class="btn small" id="saveExtsBtn">Save extensions</button><button class="btn secondary small" id="resetExtsBtn">Restore defaults</button><span class="status" id="extsStatus"></span></div>
       </div>

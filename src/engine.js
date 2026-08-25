@@ -299,14 +299,20 @@ const DlpEngine = (() => {
   // Should this file be read+scanned given the user's config?
   // exts: array of extensions or bare filenames (empty = scan any text file).
   // maxBytes: skip files larger than this. Pure — no DOM/file access.
+  // Files with NO real extension (id_rsa, cert, server-key, .netrc, …) are
+  // ALWAYS scanned: private keys and credentials are routinely saved without
+  // one, and binary extensionless files are caught later by looksBinary().
   function shouldScanFile(name, sizeBytes, exts, maxBytes) {
     if (typeof sizeBytes === 'number' && maxBytes > 0 && sizeBytes > maxBytes) return false;
     const n = String(name || '').toLowerCase();
+    const base = n.slice(n.lastIndexOf('/') + 1);
+    const dot = base.lastIndexOf('.');
+    if (dot <= 0) return true; // no extension, or a leading-dot dotfile → scan
     if (!Array.isArray(exts) || exts.length === 0) return true; // scan all under size
     for (let e of exts) {
       e = String(e).toLowerCase().trim().replace(/^\./, '');
       if (!e) continue;
-      if (n === e || n.endsWith('.' + e)) return true;
+      if (base === e || base.endsWith('.' + e)) return true;
     }
     return false;
   }

@@ -420,6 +420,12 @@ WRuPspPXIAHPKrjEHkUsgDZHW/V0fJWbIjJarw==
   expect('empty list scans any under size', DlpEngine.shouldScanFile('whatever.bin', 10, [], MB) === true, '');
   expect('empty list still respects size', DlpEngine.shouldScanFile('whatever.bin', 5 * MB, [], MB) === false, '');
   expect('leading-dot ext normalized', DlpEngine.shouldScanFile('x.json', 10, ['.json'], MB) === true, '');
+  // extensionless files are always scanned (private certs/keys/dumps)
+  expect('scans extensionless cert', DlpEngine.shouldScanFile('mycert', 3000, exts, MB) === true, '');
+  expect('scans extensionless server-key', DlpEngine.shouldScanFile('server-key', 3000, exts, MB) === true, '');
+  expect('scans leading-dot dotfile', DlpEngine.shouldScanFile('.customrc', 100, exts, MB) === true, '');
+  expect('scans extensionless with path', DlpEngine.shouldScanFile('/home/u/.ssh/deploy', 3000, exts, MB) === true, '');
+  expect('still skips oversize extensionless', DlpEngine.shouldScanFile('bigdump', 5 * MB, exts, MB) === false, '');
   // binary sniff
   expect('looksBinary on NUL bytes', DlpEngine.looksBinary('abc\x00\x00def') === true, '');
   expect('text is not binary', DlpEngine.looksBinary('api_key: 12345\nhello world') === false, '');

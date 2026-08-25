@@ -670,16 +670,32 @@
   }
 
   async function handleFiles(fileList, sourceInput) {
-    if (!fileScanActive() || !fileList || fileList.length === 0) return;
+    if (!fileList || fileList.length === 0) return;
+    if (!fileScanActive()) {
+      const why = !STATE.enabled ? 'protection off' : !STATE.fileScanEnabled ? 'file scanning off'
+        : siteDisabled() ? 'site disabled' : STATE.suspendReason ? `suspended (${STATE.suspendReason})` : 'not ready';
+      console.info(`${LOG_PREFIX} file scan skipped — ${why}`);
+      return;
+    }
     const risky = [];
     for (const file of fileList) {
       if (!file || scannedFiles.has(file)) continue;
       scannedFiles.add(file);
-      if (!DlpEngine.shouldScanFile(file.name, file.size, STATE.fileExtensions, STATE.fileMaxBytes)) continue;
+      if (!DlpEngine.shouldScanFile(file.name, file.size, STATE.fileExtensions, STATE.fileMaxBytes)) {
+        const reason = file.size > STATE.fileMaxBytes
+          ? `too large (${Math.round(file.size / 1024)}KB > ${Math.round(STATE.fileMaxBytes / 1024)}KB)`
+          : 'file type not in the scan list (binary formats like PDF/DOCX/images are not scanned)';
+        console.info(`${LOG_PREFIX} not scanning "${file.name}" — ${reason}`);
+        continue;
+      }
       let text;
       try { text = await file.text(); } catch (_e) { continue; }
-      if (!text || DlpEngine.looksBinary(text)) continue;
+      if (!text || DlpEngine.looksBinary(text)) {
+        console.info(`${LOG_PREFIX} not scanning "${file.name}" — looks binary`);
+        continue;
+      }
       const ranges = DlpEngine.findRanges(text, 2000);
+      console.info(`${LOG_PREFIX} scanned "${file.name}" — ${ranges.length} secret(s) found`);
       if (ranges.length === 0) continue;
       const labels = [...new Set(ranges.map((r) => r.label))].slice(0, 6);
       risky.push({ name: file.name, count: ranges.length, labels });
@@ -698,17 +714,23 @@
     } catch (_e) { /* extension reloaded */ }
   }
 
-  // file input: fires after the user picks files
-  document.addEventListener('change', (event) => {
+  // file input: fires after the user picks files. Listen on BOTH window and
+  // document (capture) so a page that stops propagation at either level can't
+  // hide the selection from us; the scannedFiles WeakSet dedupes File objects.
+  const onChange = (event) => {
     const t = event.target;
     if (t instanceof HTMLInputElement && t.type === 'file') handleFiles(t.files, t);
-  }, true);
+  };
+  window.addEventListener('change', onChange, true);
+  document.addEventListener('change', onChange, true);
 
   // drag-and-drop onto the page
-  document.addEventListener('drop', (event) => {
+  const onDrop = (event) => {
     const files = event.dataTransfer && event.dataTransfer.files;
     if (files && files.length) handleFiles(files, null);
-  }, true);
+  };
+  window.addEventListener('drop', onDrop, true);
+  document.addEventListener('drop', onDrop, true);
 
   // pasted files (e.g. a copied file from the OS file manager)
   window.addEventListener('paste', (event) => {

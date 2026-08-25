@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>ChatGPT-like upload repro</title></head>
+<body>
+<h1>ChatGPT-like upload repro</h1>
+<div id="composer">
+  <div class="wrap">
+    <button id="attach">＋ Attach</button>
+    <!-- ChatGPT-style: hidden input, deeply nested, multiple, triggered by button -->
+    <input id="hidden" type="file" multiple style="display:none" data-testid="file-upload">
+  </div>
+</div>
+<div id="log">log:</div>
+<script>
+  const log = (m) => { document.getElementById('log').textContent += '\n' + m; };
+  const input = document.getElementById('hidden');
+  document.getElementById('attach').addEventListener('click', () => input.click());
+  // The page reads files on change AND stops propagation (aggressive SPA pattern)
+  document.getElementById('composer').addEventListener('change', (e) => {
+    log('page saw change: ' + [...(e.target.files||[])].map(f=>f.name).join(','));
+    e.stopImmediatePropagation();
+  }, true); // capture, on an ancestor
+  // drag-drop that also stops propagation
+  document.getElementById('composer').addEventListener('drop', (e) => {
+    e.preventDefault();
+    log('page saw drop: ' + [...(e.dataTransfer.files||[])].map(f=>f.name).join(','));
+    e.stopImmediatePropagation();
+  }, true);
+  document.getElementById('composer').addEventListener('dragover', (e)=>e.preventDefault());
+</script>
+</body>
+</html>

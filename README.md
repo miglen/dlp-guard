@@ -73,8 +73,11 @@ DOM or to storage), and only *counts* are sent to the service worker for the bad
   ignoring the panel) is recorded in the stats. Configurable in the options page: on/off,
   a max file size, and the list of extensions / filenames to scan (defaults cover text
   and credential files — `.env`, `.pem`, `id_rsa`, `credentials`, `.npmrc`, configs,
-  source, etc.). Binary office/image formats are out of scope (they'd need format
-  parsers); files over the size limit or that sniff as binary are skipped.
+  source, etc.). **Extensionless files** (a private cert saved as `id_rsa`, `cert`,
+  `server-key`, …) are always scanned, since keys and credentials are routinely saved
+  without an extension. Binary office/image formats are out of scope (they'd need format
+  parsers); files over the size limit or that sniff as binary are skipped. Open the
+  browser DevTools console to see exactly what DLP Guard scanned or skipped and why.
 - **Deliberate bypass, always counted** — the redaction toast has a **Paste original**
   button that swaps the real clipboard text back in. In-place replacement is tried
   first; when the editor makes that impossible, a one-shot re-paste window (15 s) is
