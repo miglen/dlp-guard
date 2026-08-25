@@ -87,12 +87,16 @@ for (const [name, text] of negatives) {
     r.length ? `matched: ${r.map((x) => x.label).join(',')}` : '');
 }
 
-// ── 5. redactString ──────────────────────────────────────────────────────────
+// ── 5. redactString: structure-preserving masks ──────────────────────────────
 {
   const { text, count } = DlpEngine.redactString(
     'here AKIAIOSFODNN7EXAMPLE and sk_live_abcdefghijklmnopqrstuvwx end');
   expect('redactString count', count === 2, `count=${count}`);
-  expect('redactString no leak', !text.includes('AKIAIOSFODNN7EXAMPLE') && !text.includes('sk_live_'), text);
+  expect('redactString hides middles',
+    !text.includes('AKIAIOSFODNN7EXAMPLE') && !text.includes('IOSFODNN') &&
+    !text.includes('abcdefghijklmnopqrst'), text);
+  expect('redactString keeps token prefix/suffix',
+    text.includes('AKIA') && text.includes('MPLE') && text.includes('sk_l') && text.includes('uvwx'), text);
   expect('redactString keeps rest', text.startsWith('here ') && text.endsWith(' end'), text);
 }
 
@@ -123,7 +127,7 @@ for (const [name, text] of negatives) {
   const covered = ranges.some((r) => s.slice(r.start, r.end).includes('AKIAIOSFODNN7EXAMPLE'));
   expect('overlap union covers full token', covered, JSON.stringify(ranges));
   const { text } = DlpEngine.redactString(s);
-  expect('no partial token survives', !text.includes('AKIA'), text);
+  expect('no full token survives', !text.includes('AKIAIOSFODNN7EXAMPLE') && !text.includes('IOSFODNN'), text);
 }
 
 // ── 9. redactString is uncapped — every secret in a huge paste is redacted ───
@@ -131,7 +135,7 @@ for (const [name, text] of negatives) {
   const big = 'AKIAIOSFODNN7EXAMPLE '.repeat(520);
   const { text, count } = DlpEngine.redactString(big);
   expect('uncapped redaction count', count >= 520, `count=${count}`);
-  expect('uncapped redaction no leak', !text.includes('AKIA'), '');
+  expect('uncapped redaction no leak', !text.includes('AKIAIOSFODNN7EXAMPLE') && !text.includes('IOSFODNN'), '');
 }
 
 // ── 10. assignment base trimming (dataset labels with stray spaces) ──────────
@@ -159,6 +163,9 @@ WRuPspPXIAHPKrjEHkUsgDZHW/V0fJWbIjJarw==
   const { text } = DlpEngine.redactString('context before\n' + pem + '\nafter');
   expect('pem body never survives redaction', !/MIIBOA|AiEAio|WRuPsp/.test(text), text.slice(0, 200));
   expect('pem surroundings survive', text.startsWith('context before') && text.endsWith('after'), '');
+  expect('pem BEGIN/END lines preserved',
+    text.includes('-----BEGIN RSA PRIVATE KEY-----') && text.includes('-----END RSA PRIVATE KEY-----'), text.slice(0, 250));
+  expect('pem body is star lines', /-----BEGIN RSA PRIVATE KEY-----\n\*+\n/.test(text), text.slice(0, 250));
 
   // other key types, including EC (covered only by the repaired generic pattern)
   for (const kind of ['OPENSSH', 'EC', 'DSA']) {
@@ -189,7 +196,34 @@ WRuPspPXIAHPKrjEHkUsgDZHW/V0fJWbIjJarw==
   expect('two blocks are separate matches, text between stays visible', covered2, JSON.stringify(rt));
 }
 
-// ── 12. page guard URL matrix ─────────────────────────────────────────────────
+// ── 12. structure-preserving masks: user-reported AWS + OPENSSH examples ─────
+{
+  const env = [
+    'export AWS_ACCESS_KEY_ID="ASIAQV76KKSL4NXIFSPM"',
+    'export AWS_SECRET_ACCESS_KEY="ntkv1NJz2o7PWE55P6v+fnDCLJI1fI18hMDHKE3I"',
+    'export AWS_SESSION_TOKEN="IQoJb3JpZ2luX2VjED8aDGV1LWNlbnRyYWwtMSJIMEYCIQCJnwBl4Afl4tMKs13F7WhBjiHzywYru5GTsrUz5gil7AIhAMwaPuwYR9pT3TTOusJsp46MKiD2kzk5SbAZAyofgPEx"',
+  ].join('\n');
+  const { text } = DlpEngine.redactString(env);
+  expect('access key keeps ASIA prefix + FSPM suffix',
+    /AWS_ACCESS_KEY_ID="ASIA\*+FSPM"/.test(text), text);
+  expect('access key middle hidden', !text.includes('QV76KKSL4NXI'), text);
+  expect('secret key all stars', /AWS_SECRET_ACCESS_KEY="\*+"/.test(text), text);
+  expect('secret key gone', !text.includes('ntkv1NJz'), '');
+  expect('session token all stars', /AWS_SESSION_TOKEN="\*+"/.test(text), text);
+  expect('session token gone', !text.includes('IQoJb3Jp'), '');
+  expect('export structure intact', text.split('\n').every((l) => l.startsWith('export AWS_')), text);
+  expect('star runs capped at 35', !/\*{36}/.test(text), '');
+
+  const ossh = '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\nQyNTUxOQAAACAoPXsyQLSo/o83bwPuozFuyCeK1MdbgrqoqDPMKTNsaQAAAKjcmmPP3Jpj\nIDBAU=\n-----END OPENSSH PRIVATE KEY-----';
+  const masked = DlpEngine.maskValue(ossh, 'privatekey');
+  const mlines = masked.split('\n');
+  expect('openssh mask keeps BEGIN line', mlines[0] === '-----BEGIN OPENSSH PRIVATE KEY-----', masked);
+  expect('openssh mask keeps END line', mlines[mlines.length - 1] === '-----END OPENSSH PRIVATE KEY-----', masked);
+  expect('openssh mask body is stars only', mlines.slice(1, -1).every((l) => /^\*+$/.test(l)), masked);
+  expect('openssh mask leaks nothing', !masked.includes('b3Blbn'), masked);
+}
+
+// ── 13. page guard URL matrix ─────────────────────────────────────────────────
 {
   const guardCode = src('pageguard.js');
   function guardFor(hostname, pathname) {

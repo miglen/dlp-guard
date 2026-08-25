@@ -159,6 +159,13 @@ const raw = readFileSync(yamlPath, 'utf8');
 const entries = parseYaml(raw);
 console.log(`parsed ${entries.length} patterns from dataset`);
 
+// Supplemental patterns the dataset lacks but real-world usage requires
+// (AWS STS credentials always travel with a session token).
+entries.push(
+  { name: 'aws_session_token', regex: 'aws[_-]?session[_-]?token(=| =|:| :)', confidence: 'low' },
+  { name: 'session_token', regex: 'session[_-]?token(=| =|:| :)', confidence: 'low' },
+);
+
 const seen = new Set();
 const out = [];
 const dropped = [];

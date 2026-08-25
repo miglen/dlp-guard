@@ -19,14 +19,21 @@ DOM or to storage), and only *counts* are sent to the service worker for the bad
 
 ## Features
 
-- **Hide secrets on pages** — text nodes are scanned (initial sweep + MutationObserver
-  for SPA/streamed content) and matches collapse into compact pills, Claude-style:
-  `🔒 RSA · 8 lines hidden` for blocks, `🔒 AWS_CLIENT_ID hidden` for tokens.
-  Click a pill to expand/collapse (toggleable). Private key blocks
-  (`-----BEGIN … PRIVATE KEY-----` through the END marker, RSA/EC/DSA/OPENSSH/PGP/PKCS8)
-  are hidden in full — header, body, and footer.
-- **Redact on paste** — pasted text is scanned before insertion; secrets become
-  `[HIDDEN_<TYPE>]`. Works in `<textarea>`, `<input>`, and contenteditable editors
+- **Hide secrets on pages, structure preserved** — text nodes are scanned (initial
+  sweep + MutationObserver for SPA/streamed content) and matches are replaced with
+  masks that mirror the shape of what they hide, never the content:
+  - identifiable tokens keep 4 chars each side: `ASIA*******FSPM` (the prefix comes
+    from a public pattern DB, so it is not itself secret)
+  - pure-entropy values (assignment values, secrets) become all stars, with star runs
+    capped at 35 so the mask doesn't leak the value's length
+  - private key blocks (RSA/EC/DSA/OPENSSH/PGP/PKCS8) keep their `-----BEGIN`/`-----END`
+    lines with the body replaced by star lines
+  Click a mask to reveal/re-hide (toggleable). The same masks are used for paste
+  redaction, so `export AWS_ACCESS_KEY_ID="ASIA…"` arrives as
+  `export AWS_ACCESS_KEY_ID="ASIA*******FSPM"`.
+- **Redact on paste** — pasted text is scanned before insertion; secrets are replaced
+  with the same structure-preserving masks described above.
+  Works in `<textarea>`, `<input>`, and contenteditable editors
   (ProseMirror/React chat inputs) via `execCommand('insertText')`. The listener is
   registered at `document_start` on `window` (capture), so it runs before any page
   script can observe the raw clipboard. Pastes outside editable fields are never
@@ -48,7 +55,7 @@ DOM or to storage), and only *counts* are sent to the service worker for the bad
   | Category | Count | Default | What |
   |---|---|---|---|
   | API keys & tokens | 61 | on | Concrete formats: `AKIA…`, `xox…`, `sk_live_…`, JWT, … |
-  | key=value assignments | 689 | on | `api_key: <value>` — only the value is hidden |
+  | key=value assignments | 691 | on | `api_key: <value>` — only the value is hidden |
   | Private key blocks | 5 | on | whole `-----BEGIN…-----END-----` armor blocks |
   | Cloud endpoints | 12 | off | `*.cloudfront.net`, `*.s3.amazonaws.com`, … (noisy) |
   | Generic URLs/UUIDs | 4 | off | catch-alls (very noisy) |
@@ -58,8 +65,8 @@ DOM or to storage), and only *counts* are sent to the service worker for the bad
   armed instead — bound to exactly the same clipboard text, and even that paste is
   cancelled and inserted by the extension so page paste listeners never see the event.
   The toast lives in a closed shadow root and bypass clicks are geometry-verified, so
-  page scripts can neither press the button nor clickjack it. Expanding a pill is also
-  a bypass. Both kinds are recorded: persistent counters plus a rolling 200-entry log
+  page scripts can neither press the button nor clickjack it. Revealing a mask on the
+  page is also a bypass. Both kinds are recorded: persistent counters plus a rolling 200-entry log
   (`timestamp · hostname · kind · secret count` — never the values) in
   `chrome.storage.local`; totals show in the popup under **Bypass stats**.
 - **Per-site disable** and a global kill switch in the popup; badge shows the number of

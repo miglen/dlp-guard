@@ -88,17 +88,24 @@ const DlpEngine = (() => {
           if (isPlaceholderValue(m[p.valueGroup])) continue;
           [start, end] = idx;
         }
-        ranges.push({ start, end, label: p.label });
+        ranges.push({ start, end, label: p.label, category: p.category });
         if (ranges.length > maxRanges) return mergeRanges(ranges);
       }
     }
     return mergeRanges(ranges);
   }
 
+  // For identical ranges, the category decides the mask style — token wins so
+  // e.g. AWS_ACCESS_KEY_ID="ASIA…" keeps its identifiable prefix rather than
+  // getting the assignment pattern's full-star mask.
+  const CATEGORY_PRIORITY = { token: 0, privatekey: 1, assignment: 2, infra: 3, generic: 4 };
+
   // Sort by start; overlapping ranges are merged (extended), never dropped —
   // a partially-overlapping detection must not leave its tail unmasked.
   function mergeRanges(ranges) {
-    ranges.sort((a, b) => a.start - b.start || b.end - a.end);
+    ranges.sort((a, b) =>
+      a.start - b.start || b.end - a.end ||
+      (CATEGORY_PRIORITY[a.category] ?? 9) - (CATEGORY_PRIORITY[b.category] ?? 9));
     const out = [];
     let lastEnd = -1;
     for (const r of ranges) {
@@ -113,7 +120,40 @@ const DlpEngine = (() => {
     return out;
   }
 
-  // Replace all detected secrets in a string with [HIDDEN_<LABEL>].
+  // ── Structure-preserving masks ───────────────────────────────────────────
+  // The mask mirrors the shape of what it hides, never its content:
+  //   token       → ASIA****************FSPM  (identifiable prefix/suffix kept)
+  //   assignment  → ***********************   (pure-entropy value: stars only)
+  //   private key → BEGIN line + star lines + END line
+  // Star runs are capped so the mask never leaks the value's exact length.
+  const STAR_CAP = 35;
+  function starRun(n) {
+    return '*'.repeat(Math.max(4, Math.min(n, STAR_CAP)));
+  }
+
+  function maskValue(hidden, category) {
+    if (category === 'privatekey' && hidden.includes('\n')) {
+      const lines = hidden.split('\n');
+      let endIdx = -1;
+      for (let i = lines.length - 1; i > 0; i--) {
+        if (lines[i].trimStart().startsWith('-----END')) { endIdx = i; break; }
+      }
+      const bodyEnd = endIdx === -1 ? lines.length : endIdx;
+      const body = lines.slice(1, bodyEnd).filter((l) => l.trim() !== '');
+      const out = [lines[0], ...body.slice(0, 4).map((l) => starRun(l.length))];
+      if (endIdx !== -1) out.push(lines[endIdx]);
+      return out.join('\n');
+    }
+    // Token formats carry a public, non-secret vendor prefix (they come from a
+    // public pattern DB) — keep 4 chars each side so the user can tell WHICH
+    // credential is hidden. Assignment values are arbitrary entropy: all stars.
+    if (category === 'token' && hidden.length >= 16 && !hidden.includes('\n')) {
+      return hidden.slice(0, 4) + starRun(hidden.length - 8) + hidden.slice(-4);
+    }
+    return starRun(hidden.length);
+  }
+
+  // Replace all detected secrets in a string with structure-preserving masks.
   // Returns {text, count}.
   function redactString(text) {
     const ranges = findRanges(text, Infinity);
@@ -121,12 +161,12 @@ const DlpEngine = (() => {
     let out = '';
     let pos = 0;
     for (const r of ranges) {
-      out += text.slice(pos, r.start) + `[HIDDEN_${r.label}]`;
+      out += text.slice(pos, r.start) + maskValue(text.slice(r.start, r.end), r.category);
       pos = r.end;
     }
     out += text.slice(pos);
     return { text: out, count: ranges.length };
   }
 
-  return Object.freeze({ CATEGORY_DEFAULTS, compile, findRanges, redactString });
+  return Object.freeze({ CATEGORY_DEFAULTS, compile, findRanges, redactString, maskValue });
 })();

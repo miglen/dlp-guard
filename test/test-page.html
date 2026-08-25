@@ -22,6 +22,8 @@
   sk_live_abcdefghijklmnopqrstuvwx should never appear in chat.</p>
 
   <h2>2. Secrets in a code block</h2>
+  <p class="note">Values become stars; identifiable token prefixes/suffixes stay
+  (e.g. <code>ASIA*******FSPM</code>); labels and structure stay readable:</p>
   <pre>
 # .env file pasted into a chat
 api_key: 8f2a9c1d4e5b6a7f8091a2b3c4d5e6f7
@@ -29,12 +31,15 @@ db_password = Sup3rS3cretV4lue99
 GOOGLE_KEY="AIzaSyA1234567890abcdefghijklmnopqrstuv"
 github = 'gh1234567890abcdef1234567890abcdef123'
 mailgun: key-abcdef0123456789abcdef0123456789
+export AWS_ACCESS_KEY_ID="ASIAQV76KKSL4NXIFSPM"
+export AWS_SECRET_ACCESS_KEY="ntkv1NJz2o7PWE55P6v+fnDCLJI1fI18hMDHKE3I"
+export AWS_SESSION_TOKEN="IQoJb3JpZ2luX2VjED8aDGV1LWNlbnRyYWwtMSJIMEYCIQCJnwBl4Afl4tMKs13F7WhBjiHzywYru5GTsrUz5gil7AIhAMwaPuwYR9pT3TTOusJsp46MKiD2kzk5SbAZAyofgPEx"
   </pre>
 
   <h2>3. JWT and private key</h2>
   <p>Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N65N65cp6GSdC1fCzX2 in a header.</p>
-  <p class="note">The ENTIRE key block below (header, body, footer) must collapse into
-  one pill like “🔒 RSA · 8 lines hidden”:</p>
+  <p class="note">The key block below must keep its BEGIN/END lines with the body
+  replaced by star lines (click the red area to reveal):</p>
   <pre>-----BEGIN RSA PRIVATE KEY-----
 MIIBOAIBAAJARsF2wfXtjllRR8nnz8+CLULn0bqgZtYktJB2BdcB5bw6OYmmDVCc
 TeTC3VXZATdSqNA6WDWCkSVinC05uYEOEwIDAQABAkArUAaYmSkAeKCO54Pl7Ert
@@ -55,7 +60,8 @@ WRuPspPXIAHPKrjEHkUsgDZHW/V0fJWbIjJarw==
 
   <h2>6. Paste redaction + bypass</h2>
   <p class="note">Copy this line, then paste it into the box —
-  the key must arrive as [HIDDEN_…]. The toast offers <b>Paste original</b>;
+  the keys must arrive masked (<code>AKIA************MPLE</code>-style).
+  The toast offers <b>Paste original</b>;
   clicking it swaps the real value back in and increments the bypass counter
   (see popup → Bypass stats):</p>
   <pre>please debug: AKIAIOSFODNN7EXAMPLE and twilio SKabcdef0123456789abcdef0123456789</pre>

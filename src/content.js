@@ -131,47 +131,28 @@
     style.id = 'dlpg-style';
     style.textContent = `
       [${MASK_ATTR}] {
-        display: inline-block;
         background: #fde8e8;
         border: 1px solid #f3b1b1;
         color: #9b1c1c;
-        border-radius: 999px;
-        padding: 1px 10px;
-        font-family: system-ui, -apple-system, sans-serif;
-        font-size: 0.82em;
-        font-weight: 500;
-        line-height: 1.5;
-        cursor: pointer;
-        user-select: none;
-        white-space: nowrap;
-        vertical-align: baseline;
-      }
-      [${MASK_ATTR}]:hover { border-color: #e02424; }
-      [${MASK_ATTR}][data-dlpg-revealed] {
-        display: inline;
-        background: #fdf6b2;
-        border-color: #c27803;
-        color: #633112;
         border-radius: 4px;
         padding: 0 3px;
         font-family: inherit;
         font-size: inherit;
-        font-weight: inherit;
-        user-select: text;
+        cursor: pointer;
+        user-select: none;
         white-space: pre-wrap;
+      }
+      [${MASK_ATTR}]:hover { border-color: #e02424; }
+      [${MASK_ATTR}][data-dlpg-revealed] {
+        background: #fdf6b2;
+        border-color: #c27803;
+        color: #633112;
+        user-select: text;
       }
     `;
     (document.head || document.documentElement).appendChild(style);
   }
 
-  // Collapsed-pill text, like Claude's "[Pasted text +N lines]" chips:
-  // the chip says what is hidden and how much, never the content itself.
-  function maskChipText(label, hidden) {
-    const lines = hidden ? hidden.replace(/\n+$/, '').split('\n').length : 1;
-    if (lines > 1) return `🔒 ${label} · ${lines} lines hidden`;
-    if (hidden && hidden.length > 24) return `🔒 ${label} · ${hidden.length} chars hidden`;
-    return `🔒 ${label} hidden`;
-  }
 
   function shouldSkipNode(textNode) {
     let el = textNode.parentElement;
@@ -213,9 +194,10 @@
       const span = document.createElement('span');
       span.setAttribute(MASK_ATTR, r.label);
       const hidden = text.slice(r.start, r.end);
-      span.textContent = maskChipText(r.label, hidden);
-      span.title = 'Secret hidden by DLP Guard' + (STATE.revealOnClick ? ' — click to reveal' : '');
-      originals.set(span, hidden);
+      const masked = DlpEngine.maskValue(hidden, r.category);
+      span.textContent = masked;
+      span.title = `${r.label} hidden by DLP Guard` + (STATE.revealOnClick ? ' — click to reveal' : '');
+      originals.set(span, { real: hidden, masked });
       frag.appendChild(span);
       pos = r.end;
       STATE.maskCount++;
@@ -233,10 +215,10 @@
     scanGeneration++; // any in-flight scan chain is now stale
     const spans = document.querySelectorAll(`[${MASK_ATTR}]`);
     for (const span of spans) {
-      const real = originals.get(span);
-      // A chip whose original was lost (e.g. framework cloned the element)
-      // must not "restore" its decorative chip text as if it were content.
-      const textNode = document.createTextNode(real != null ? real : '');
+      const entry = originals.get(span);
+      // A mask whose original was lost (e.g. framework cloned the element)
+      // must not "restore" star text as if it were content.
+      const textNode = document.createTextNode(entry ? entry.real : '');
       span.parentNode?.replaceChild(textNode, span);
     }
     STATE.maskCount = 0;
@@ -254,15 +236,15 @@
     if (!span || !originals.has(span)) return;
     ev.preventDefault();
     ev.stopPropagation();
+    const entry = originals.get(span);
     if (span.hasAttribute('data-dlpg-revealed')) {
       span.removeAttribute('data-dlpg-revealed');
-      span.textContent = maskChipText(span.getAttribute(MASK_ATTR), originals.get(span));
+      span.textContent = entry.masked;
     } else {
       span.setAttribute('data-dlpg-revealed', '1');
-      const val = originals.get(span);
-      span.textContent = val;
-      if (!revealedValues.has(val)) {
-        revealedValues.add(val);
+      span.textContent = entry.real;
+      if (!revealedValues.has(entry.real)) {
+        revealedValues.add(entry.real);
         reportBypass('reveal', 1);
       }
     }
