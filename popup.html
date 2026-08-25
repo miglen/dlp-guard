@@ -48,6 +48,11 @@
   .row label { flex: 1; cursor: pointer; }
   .hint { font-size: 11px; color: #6b7280; margin: 2px 0 0; }
   input[type="checkbox"] { accent-color: #e02424; width: 15px; height: 15px; cursor: pointer; }
+  .statsline { font-size: 11px; color: #6b7280; text-align: center; margin-bottom: 8px; }
+  #openOptions {
+    width: 100%; padding: 8px; background: #1f2937; color: #fff; border: none;
+    border-radius: 6px; font: 600 12px system-ui, sans-serif; cursor: pointer;
+  }
   footer {
     padding: 8px 14px; font-size: 11px; color: #6b7280; text-align: center;
   }
@@ -74,7 +79,6 @@
   </div>
 
   <div class="section">
-    <h2>Features</h2>
     <div class="row">
       <label for="maskOnPage">Hide secrets on pages</label>
       <input type="checkbox" id="maskOnPage">
@@ -83,69 +87,11 @@
       <label for="redactPaste">Redact secrets on paste</label>
       <input type="checkbox" id="redactPaste">
     </div>
-    <div class="row">
-      <label for="revealOnClick">Click a mask to reveal</label>
-      <input type="checkbox" id="revealOnClick">
-    </div>
-    <div class="row">
-      <label for="exfilShield">Exfiltration shield <span class="hint">(block bulk copies)</span></label>
-      <input type="checkbox" id="exfilShield">
-    </div>
-  </div>
-
-  <div class="section">
-    <h2>Detections</h2>
-    <div class="row">
-      <label for="catToken">API keys &amp; tokens</label>
-      <input type="checkbox" id="catToken">
-    </div>
-    <div class="row">
-      <label for="catAssignment">key = value assignments</label>
-      <input type="checkbox" id="catAssignment">
-    </div>
-    <div class="row">
-      <label for="catPrivatekey">Private key blocks</label>
-      <input type="checkbox" id="catPrivatekey">
-    </div>
-    <div class="row">
-      <label for="catPii">PII: IPs, emails, SSN, cards <span class="hint">(noisy)</span></label>
-      <input type="checkbox" id="catPii">
-    </div>
-    <div class="row">
-      <label for="catInfra">Cloud endpoints <span class="hint">(noisy)</span></label>
-      <input type="checkbox" id="catInfra">
-    </div>
-    <div class="row">
-      <label for="catGeneric">Generic URLs/UUIDs <span class="hint">(very noisy)</span></label>
-      <input type="checkbox" id="catGeneric">
-    </div>
-  </div>
-
-  <div class="section">
-    <h2>Custom protected terms</h2>
-    <textarea id="customTerms" rows="3" placeholder="One term per line — server names, client names, codenames…"
-      style="width:100%; box-sizing:border-box; font:12px system-ui,sans-serif; resize:vertical;"></textarea>
-    <button id="saveTerms" style="margin-top:6px; width:100%; padding:6px; background:#e02424; color:#fff; border:none; border-radius:6px; font:600 12px system-ui,sans-serif; cursor:pointer;">Save terms</button>
-  </div>
-
-  <div class="section">
-    <h2>Bypass stats</h2>
-    <div class="row">
-      <label>Originals pasted (bypass)</label>
-      <span id="bypassCount">0</span>
-    </div>
-    <div class="row">
-      <label>Masks revealed</label>
-      <span id="revealCount">0</span>
-    </div>
-    <div class="row">
-      <label>Bulk copies blocked</label>
-      <span id="exfilCount">0</span>
-    </div>
   </div>
 
   <div class="section" style="border-bottom:none;">
-    <button id="openOptions" style="width:100%; padding:8px; background:#1f2937; color:#fff; border:none; border-radius:6px; font:600 12px system-ui,sans-serif; cursor:pointer;">⚙️ Advanced settings, regex &amp; import/export</button>
+    <div class="statsline" id="statsLine">No bypasses yet</div>
+    <button id="openOptions">⚙️ Advanced settings</button>
   </div>
 
   <footer>100% local · never active on login pages</footer>

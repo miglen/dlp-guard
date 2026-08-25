@@ -15,9 +15,14 @@ const DEFAULTS = {
   dlp_revealOnClick: true,
   dlp_exfilShield: true,
   dlp_exfilThreshold: 10,
+  dlp_guardPasswordField: true,
+  dlp_guardAuthUrl: true,
+  dlp_redactInPasswordFields: false,
+  dlp_skipCloudEditors: true,
   dlp_cats: { ...CAT_DEFAULTS },
   dlp_customTerms: [],
   dlp_userPatterns: [],
+  dlp_builtinOverrides: [],
   dlp_disabledSites: [],
 };
 
@@ -48,13 +53,16 @@ function loadAll() {
       if (el.type === 'checkbox') el.checked = items[key] !== false;
       else el.value = items[key];
     });
-    const cats = { ...CAT_DEFAULTS, ...(items.dlp_cats || {}) };
-    $$('[data-cat]').forEach((el) => { el.checked = Boolean(cats[el.dataset.cat]); });
+    currentCats = { ...CAT_DEFAULTS, ...(items.dlp_cats || {}) };
+    $$('[data-cat]').forEach((el) => { el.checked = Boolean(currentCats[el.dataset.cat]); });
     if (document.activeElement !== $('termsArea')) {
       $('termsArea').value = (items.dlp_customTerms || []).join('\n');
     }
-    renderPatterns(items.dlp_userPatterns || []);
     renderSites(items.dlp_disabledSites || []);
+    builtinOverrides = Array.isArray(items.dlp_builtinOverrides) ? items.dlp_builtinOverrides : [];
+    userPatterns = Array.isArray(items.dlp_userPatterns) ? items.dlp_userPatterns : [];
+    renderAllPatterns();
+    renderCustomCats();
   });
   loadStats();
   renderCategoryCounts();
@@ -86,24 +94,31 @@ $$('[data-setting]').forEach((el) => {
 
 $$('[data-cat]').forEach((el) => {
   el.addEventListener('change', () => {
-    const cats = {};
+    // merge onto existing cats so custom-category flags aren't wiped
+    const cats = { ...currentCats };
     $$('[data-cat]').forEach((c) => { cats[c.dataset.cat] = c.checked; });
     cats.custom = true; cats.user = true; // always honored; managed per-item
+    currentCats = cats;
     chrome.storage.local.set({ dlp_cats: cats }, () => banner());
   });
 });
 
-// ── Custom regex management ───────────────────────────────────────────────────
-let editingId = null;
+// ── Pattern engine: built-in library + user patterns, unified ─────────────────
+const ALL_BUILTINS = (typeof DlpEngine !== 'undefined' && DlpEngine.builtins) ? DlpEngine.builtins() : [];
+const BUILTIN_CATS = ['token', 'assignment', 'privatekey', 'pii', 'infra', 'generic'];
+let builtinOverrides = [];   // [{id, disabled?, source?, flags?}]
+let userPatterns = [];       // [{id,label,category,source,flags,valueGroup,mask,enabled}]
+let currentCats = { ...CAT_DEFAULTS };
+let editMode = null;         // null | {type:'custom', id} | {type:'builtin', id}
+
+function ovFor(id) { return builtinOverrides.find((o) => o.id === id); }
 
 // A single catastrophic regex can't be interrupted once exec() starts, so the
 // guard is STATIC first (reject dangerous structure before running anything),
 // then a short bounded timing probe as a secondary net.
 function redosLint(source) {
-  // nested unbounded quantifiers: a group with +/* inside, itself repeated
   if (/\([^)]*[+*][^)]*\)\s*[+*]/.test(source)) return 'a group containing + or * is itself repeated (nested quantifier, classic ReDoS)';
   if (/\([^)]*[+*][^)]*\)\s*\{\d*,\d*\}/.test(source) || /\([^)]*[+*][^)]*\)\s*\{\d+,\}/.test(source)) return 'a group containing + or * is repeated with a {..,} count (nested quantifier)';
-  // repeated wildcard group like (.*x){8,} — polynomial degree n
   const braceWrap = source.match(/\([^)]*[.][*+][^)]*\)\{(\d+),?\d*\}/);
   if (braceWrap && Number(braceWrap[1]) >= 8) return 'a wildcard group repeated many times risks polynomial blowup';
   return null;
@@ -116,8 +131,6 @@ function compileTest(source, flags) {
   if (re.test('')) return { ok: false, msg: 'Rejected: matches empty string (would loop over any text).' };
   const lint = redosLint(source);
   if (lint) return { ok: false, msg: `Rejected: ${lint}. Rewrite to avoid catastrophic backtracking.` };
-  // Secondary net: SHORT probes so even a missed exponential case completes one
-  // exec quickly enough to trip the budget rather than hang the page.
   const runs = ['a', 'A', '0', 'a1', 'aA', 'a-', '=', '/', ' a'];
   const t0 = performance.now();
   for (const c of runs) {
@@ -131,120 +144,256 @@ function compileTest(source, flags) {
   return { ok: true, re };
 }
 
-$('rxTestBtn').addEventListener('click', () => {
-  const src = $('rxSource').value;
-  const flags = $('rxFlags').value || 'g';
-  const status = $('rxStatus');
-  if (!src) { status.className = 'status err'; status.textContent = 'Enter a regex.'; return; }
-  const r = compileTest(src, flags);
-  if (!r.ok) { status.className = 'status err'; status.textContent = r.msg; return; }
-  const sample = $('rxTest').value;
-  if (!sample) { status.className = 'status ok'; status.textContent = 'Regex compiles and looks safe.'; return; }
-  const matches = sample.match(r.re);
-  status.className = 'status ok';
-  status.textContent = matches ? `${matches.length} match(es): ${matches.slice(0, 5).join(' , ').slice(0, 120)}` : 'Compiles, but no match in the sample.';
-});
-
-$('rxAddBtn').addEventListener('click', () => {
-  const label = ($('rxLabel').value || '').trim();
-  const source = $('rxSource').value;
-  const flags = ($('rxFlags').value || 'g').replace(/[^gimsuy]/g, '') || 'g';
-  const status = $('rxStatus');
-  if (!label) { status.className = 'status err'; status.textContent = 'A label is required.'; return; }
-  if (!source) { status.className = 'status err'; status.textContent = 'A regex is required.'; return; }
-  const r = compileTest(source, flags);
-  if (!r.ok) { status.className = 'status err'; status.textContent = r.msg; return; }
-  const entry = {
-    id: editingId || `u${Date.now().toString(36)}${Math.floor(performance.now() % 1000)}`,
-    label, source, flags,
-    valueGroup: Math.max(0, Math.min(9, Number($('rxGroup').value) || 0)),
-    mask: $('rxMask').value === 'affix' ? 'affix' : 'stars',
-    enabled: true,
-  };
-  chrome.storage.local.get({ dlp_userPatterns: [] }, ({ dlp_userPatterns }) => {
-    const list = Array.isArray(dlp_userPatterns) ? dlp_userPatterns : [];
-    const idx = list.findIndex((p) => p.id === entry.id);
-    if (idx >= 0) { entry.enabled = list[idx].enabled; list[idx] = entry; }
-    else list.push(entry);
-    chrome.storage.local.set({ dlp_userPatterns: list }, () => {
-      resetRxForm();
-      renderPatterns(list);
-      banner(idx >= 0 ? 'Pattern updated.' : 'Pattern added.');
-    });
-  });
-});
-
-$('rxCancelBtn').addEventListener('click', resetRxForm);
-
-function resetRxForm() {
-  editingId = null;
-  $('rxLabel').value = ''; $('rxSource').value = ''; $('rxFlags').value = 'g';
-  $('rxGroup').value = '0'; $('rxMask').value = 'stars'; $('rxTest').value = '';
-  $('rxStatus').textContent = '';
-  $('rxAddBtn').textContent = 'Add pattern';
-  $('rxCancelBtn').style.display = 'none';
+// Distinct categories currently in play: built-ins + any the user invented.
+function allCategories() {
+  const set = new Set(BUILTIN_CATS);
+  for (const p of userPatterns) if (p.category) set.add(String(p.category).trim());
+  return [...set];
 }
 
-function renderPatterns(list) {
-  const tbody = $('rxTable').querySelector('tbody');
-  tbody.innerHTML = '';
-  $('rxCount').textContent = String(list.length);
-  $('rxEmpty').style.display = list.length ? 'none' : 'block';
-  $('rxTable').style.display = list.length ? 'table' : 'none';
-  for (const p of list) {
-    const tr = document.createElement('tr');
+// One flat, filterable list of rows describing every pattern (built-in + custom).
+function patternRows() {
+  const rows = [];
+  for (const p of ALL_BUILTINS) {
+    const ov = ovFor(p.id);
+    rows.push({
+      type: 'builtin', id: p.id, label: p.label, category: p.category,
+      source: ov && ov.source ? ov.source : p.source,
+      flags: ov && ov.flags ? ov.flags : p.flags,
+      valueGroup: p.valueGroup, mask: '(by category)',
+      enabled: !(ov && ov.disabled),
+      changed: Boolean(ov && (ov.source || ov.disabled)),
+      hasValidator: p.hasValidator, orig: p,
+    });
+  }
+  for (const p of userPatterns) {
+    rows.push({
+      type: 'custom', id: p.id, label: p.label, category: (p.category && String(p.category).trim()) || 'user',
+      source: p.source, flags: p.flags, valueGroup: p.valueGroup || 0,
+      mask: p.mask === 'affix' ? 'prefix/suffix' : 'stars',
+      enabled: p.enabled !== false, changed: false, custom: p,
+    });
+  }
+  return rows;
+}
 
+function renderAllPatterns() {
+  // filter select options
+  const fc = $('pxFilterCat');
+  const prev = fc.value;
+  fc.innerHTML = '<option value="">All categories</option>' +
+    allCategories().sort().map((c) => `<option value="${c}">${c}</option>`).join('');
+  fc.value = prev;
+  // datalist for the category input
+  $('pxCatList').innerHTML = allCategories().sort().map((c) => `<option value="${c}">`).join('');
+
+  const q = ($('pxSearch').value || '').toLowerCase();
+  const cat = $('pxFilterCat').value;
+  const typeF = $('pxFilterType').value;
+  const tbody = $('pxTable').querySelector('tbody');
+  tbody.innerHTML = '';
+  const CAP = 300;
+  let matched = 0, shown = 0;
+  for (const r of patternRows()) {
+    if (cat && r.category !== cat) continue;
+    if (typeF === 'custom' && r.type !== 'custom') continue;
+    if (typeF === 'builtin' && r.type !== 'builtin') continue;
+    if (typeF === 'changed' && !r.changed && r.type !== 'custom') continue;
+    if (q && !(r.label.toLowerCase().includes(q) || r.source.toLowerCase().includes(q) || r.category.toLowerCase().includes(q))) continue;
+    matched++;
+    if (shown >= CAP) continue;
+    shown++;
+
+    const tr = document.createElement('tr');
     const tdOn = document.createElement('td');
     const cb = document.createElement('input');
-    cb.type = 'checkbox'; cb.checked = p.enabled !== false;
-    cb.addEventListener('change', () => togglePattern(p.id, cb.checked));
+    cb.type = 'checkbox'; cb.checked = r.enabled;
+    cb.addEventListener('change', () => {
+      if (r.type === 'builtin') setOverride(r.id, { disabled: !cb.checked });
+      else toggleCustom(r.id, cb.checked);
+    });
     tdOn.appendChild(cb);
 
     const tdLabel = document.createElement('td');
-    tdLabel.textContent = p.label;
+    tdLabel.textContent = r.label;
+    if (r.changed) { const b = document.createElement('span'); b.className = 'pill'; b.textContent = 'changed'; b.style.marginLeft = '6px'; tdLabel.appendChild(b); }
 
-    const tdSrc = document.createElement('td');
-    tdSrc.className = 'mono';
-    tdSrc.textContent = `/${p.source}/${p.flags}` + (p.valueGroup ? ` (g${p.valueGroup})` : '');
+    const tdCat = document.createElement('td'); tdCat.textContent = r.category;
+    const tdSrc = document.createElement('td'); tdSrc.className = 'mono';
+    tdSrc.textContent = `/${r.source}/${r.flags}` + (r.valueGroup ? ` (g${r.valueGroup})` : '');
+    const tdType = document.createElement('td');
+    tdType.innerHTML = r.type === 'custom' ? '<span class="pill">custom</span>' : 'built-in';
 
-    const tdMask = document.createElement('td');
-    tdMask.textContent = p.mask === 'affix' ? 'prefix/suffix' : 'stars';
-
-    const tdActions = document.createElement('td');
+    const tdA = document.createElement('td');
     const edit = document.createElement('button');
     edit.className = 'btn secondary small'; edit.textContent = 'Edit';
-    edit.addEventListener('click', () => startEdit(p));
-    const del = document.createElement('button');
-    del.className = 'btn small'; del.textContent = 'Delete'; del.style.marginLeft = '6px';
-    del.addEventListener('click', () => deletePattern(p.id));
-    tdActions.appendChild(edit); tdActions.appendChild(del);
+    edit.addEventListener('click', () => openEditor(r));
+    tdA.appendChild(edit);
+    if (r.type === 'custom') {
+      const del = document.createElement('button');
+      del.className = 'btn small'; del.textContent = 'Delete'; del.style.marginLeft = '6px';
+      del.addEventListener('click', () => deleteCustom(r.id));
+      tdA.appendChild(del);
+    } else if (r.changed) {
+      const reset = document.createElement('button');
+      reset.className = 'btn small'; reset.textContent = 'Reset'; reset.style.marginLeft = '6px';
+      reset.addEventListener('click', () => clearOverride(r.id));
+      tdA.appendChild(reset);
+    }
 
-    tr.append(tdOn, tdLabel, tdSrc, tdMask, tdActions);
+    tr.append(tdOn, tdLabel, tdCat, tdSrc, tdType, tdA);
     tbody.appendChild(tr);
   }
+  $('pxCount').textContent = `${matched} pattern${matched === 1 ? '' : 's'}` +
+    (matched > CAP ? ` — showing first ${CAP}, narrow the search` : '') +
+    ` · ${userPatterns.length} custom · ${builtinOverrides.length} override${builtinOverrides.length === 1 ? '' : 's'}`;
 }
 
-function startEdit(p) {
-  editingId = p.id;
-  $('rxLabel').value = p.label; $('rxSource').value = p.source; $('rxFlags').value = p.flags;
-  $('rxGroup').value = String(p.valueGroup || 0); $('rxMask').value = p.mask || 'stars';
-  $('rxAddBtn').textContent = 'Save changes';
-  $('rxCancelBtn').style.display = 'inline-block';
-  $('rxSource').scrollIntoView({ behavior: 'smooth', block: 'center' });
+// ── Built-in overrides ────────────────────────────────────────────────────────
+function setOverride(id, patch) {
+  let ov = ovFor(id);
+  if (!ov) { ov = { id }; builtinOverrides.push(ov); }
+  Object.assign(ov, patch);
+  if (!ov.disabled && !ov.source && !ov.flags) builtinOverrides = builtinOverrides.filter((o) => o.id !== id);
+  chrome.storage.local.set({ dlp_builtinOverrides: builtinOverrides }, () => { renderAllPatterns(); banner(); });
 }
-
-function togglePattern(id, enabled) {
-  chrome.storage.local.get({ dlp_userPatterns: [] }, ({ dlp_userPatterns }) => {
-    const list = (dlp_userPatterns || []).map((p) => (p.id === id ? { ...p, enabled } : p));
-    chrome.storage.local.set({ dlp_userPatterns: list }, () => banner());
+function clearOverride(id) {
+  builtinOverrides = builtinOverrides.filter((o) => o.id !== id);
+  chrome.storage.local.set({ dlp_builtinOverrides: builtinOverrides }, () => {
+    if (editMode && editMode.type === 'builtin' && editMode.id === id) resetForm();
+    renderAllPatterns(); banner('Override removed.');
   });
 }
 
-function deletePattern(id) {
-  chrome.storage.local.get({ dlp_userPatterns: [] }, ({ dlp_userPatterns }) => {
-    const list = (dlp_userPatterns || []).filter((p) => p.id !== id);
-    chrome.storage.local.set({ dlp_userPatterns: list }, () => { renderPatterns(list); banner('Pattern deleted.'); });
+// ── Custom user patterns ──────────────────────────────────────────────────────
+function toggleCustom(id, enabled) {
+  userPatterns = userPatterns.map((p) => (p.id === id ? { ...p, enabled } : p));
+  chrome.storage.local.set({ dlp_userPatterns: userPatterns }, () => banner());
+}
+function deleteCustom(id) {
+  userPatterns = userPatterns.filter((p) => p.id !== id);
+  chrome.storage.local.set({ dlp_userPatterns: userPatterns }, () => {
+    if (editMode && editMode.type === 'custom' && editMode.id === id) resetForm();
+    renderAllPatterns(); renderCustomCats(); banner('Pattern deleted.');
   });
+}
+
+// ── The unified editor form ───────────────────────────────────────────────────
+function setFormEnabled(builtin) {
+  // built-ins: only source/flags editable (they become an override); label,
+  // category, mask, value-group are fixed by the shipped pattern.
+  for (const id of ['pxLabel', 'pxCategory', 'pxMask', 'pxGroup']) $(id).disabled = builtin;
+}
+
+function openEditor(r) {
+  editMode = { type: r.type, id: r.id };
+  $('pxFormTitle').textContent = r.type === 'builtin' ? `Edit built-in: ${r.label}` : `Edit pattern: ${r.label}`;
+  $('pxLabel').value = r.label;
+  $('pxCategory').value = r.category;
+  $('pxSource').value = r.source;
+  $('pxFlags').value = r.flags;
+  $('pxGroup').value = String(r.valueGroup || 0);
+  $('pxMask').value = (r.custom && r.custom.mask === 'affix') ? 'affix' : 'stars';
+  $('pxTest').value = '';
+  $('pxStatus').className = 'status';
+  $('pxStatus').textContent = (r.type === 'builtin' && r.hasValidator) ? 'Note: this pattern also has a built-in validator that still applies.' : '';
+  setFormEnabled(r.type === 'builtin');
+  $('pxSaveBtn').textContent = 'Save changes';
+  $('pxResetBtn').style.display = (r.type === 'builtin' && r.changed) ? 'inline-block' : 'none';
+  $('pxCancelBtn').style.display = 'inline-block';
+  $('pxSource').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function resetForm() {
+  editMode = null;
+  $('pxFormTitle').textContent = 'Add a pattern';
+  for (const id of ['pxLabel', 'pxCategory', 'pxSource', 'pxTest']) $(id).value = '';
+  $('pxFlags').value = 'g'; $('pxGroup').value = '0'; $('pxMask').value = 'stars';
+  $('pxStatus').textContent = '';
+  setFormEnabled(false);
+  $('pxSaveBtn').textContent = 'Add pattern';
+  $('pxResetBtn').style.display = 'none';
+  $('pxCancelBtn').style.display = 'none';
+}
+
+$('pxTestBtn').addEventListener('click', () => {
+  const r = compileTest($('pxSource').value, $('pxFlags').value || 'g');
+  const s = $('pxStatus');
+  if (!$('pxSource').value) { s.className = 'status err'; s.textContent = 'Enter a regex.'; return; }
+  if (!r.ok) { s.className = 'status err'; s.textContent = r.msg; return; }
+  const sample = $('pxTest').value;
+  if (!sample) { s.className = 'status ok'; s.textContent = 'Compiles and looks safe.'; return; }
+  const m = sample.match(r.re);
+  s.className = 'status ok';
+  s.textContent = m ? `${m.length} match(es): ${m.slice(0, 5).join(' , ').slice(0, 120)}` : 'Compiles, but no match in the sample.';
+});
+
+$('pxSaveBtn').addEventListener('click', () => {
+  const source = $('pxSource').value;
+  const flags = ($('pxFlags').value || 'g').replace(/[^gimsuy]/g, '') || 'g';
+  const s = $('pxStatus');
+  if (!source) { s.className = 'status err'; s.textContent = 'A regex is required.'; return; }
+  const r = compileTest(source, flags);
+  if (!r.ok) { s.className = 'status err'; s.textContent = r.msg; return; }
+
+  if (editMode && editMode.type === 'builtin') {
+    const p = ALL_BUILTINS.find((x) => x.id === editMode.id);
+    const patch = { source: source === p.source ? undefined : source, flags: flags === p.flags ? undefined : flags };
+    if (patch.source === undefined && patch.flags === undefined) { clearOverride(editMode.id); resetForm(); return; }
+    setOverride(editMode.id, patch);
+    resetForm();
+    return;
+  }
+
+  const label = ($('pxLabel').value || '').trim();
+  if (!label) { s.className = 'status err'; s.textContent = 'A label is required.'; return; }
+  const category = ($('pxCategory').value || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '_') || 'user';
+  const entry = {
+    id: (editMode && editMode.id) || `u${Date.now().toString(36)}${Math.floor(performance.now() % 1000)}`,
+    label, category, source, flags,
+    valueGroup: Math.max(0, Math.min(9, Number($('pxGroup').value) || 0)),
+    mask: $('pxMask').value === 'affix' ? 'affix' : 'stars',
+    enabled: true,
+  };
+  const idx = userPatterns.findIndex((p) => p.id === entry.id);
+  if (idx >= 0) { entry.enabled = userPatterns[idx].enabled !== false; userPatterns[idx] = entry; }
+  else userPatterns.push(entry);
+  chrome.storage.local.set({ dlp_userPatterns: userPatterns }, () => {
+    resetForm(); renderAllPatterns(); renderCustomCats();
+    banner(idx >= 0 ? 'Pattern updated.' : 'Pattern added.');
+  });
+});
+
+$('pxResetBtn').addEventListener('click', () => { if (editMode && editMode.type === 'builtin') clearOverride(editMode.id); });
+$('pxCancelBtn').addEventListener('click', resetForm);
+$('pxSearch').addEventListener('input', renderAllPatterns);
+$('pxFilterCat').addEventListener('change', renderAllPatterns);
+$('pxFilterType').addEventListener('change', renderAllPatterns);
+
+// ── Custom-category master toggles (shown in the Categories tab) ──────────────
+function renderCustomCats() {
+  const custom = [...new Set(userPatterns.map((p) => (p.category && String(p.category).trim()) || 'user'))]
+    .filter((c) => !BUILTIN_CATS.includes(c) && c !== 'custom');
+  const card = $('customCatsCard');
+  const host = $('customCatsRows');
+  host.innerHTML = '';
+  if (custom.length === 0) { card.style.display = 'none'; return; }
+  card.style.display = 'block';
+  for (const c of custom.sort()) {
+    const n = userPatterns.filter((p) => ((p.category && String(p.category).trim()) || 'user') === c).length;
+    const row = document.createElement('div');
+    row.className = 'row';
+    const label = document.createElement('label');
+    label.innerHTML = `${c} <span class="pill">${n}</span>`;
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.checked = currentCats[c] !== false;
+    cb.addEventListener('change', () => {
+      currentCats = { ...currentCats, [c]: cb.checked };
+      chrome.storage.local.set({ dlp_cats: currentCats }, () => banner());
+    });
+    row.append(label, cb);
+    host.appendChild(row);
+  }
 }
 
 // ── Protected terms ───────────────────────────────────────────────────────────
@@ -291,14 +440,75 @@ $('addSiteBtn').addEventListener('click', () => {
 });
 
 // ── Stats & log ───────────────────────────────────────────────────────────────
+let chartGrouping = 'day';
+
 function loadStats() {
-  chrome.storage.local.get({ dlp_bypassCount: 0, dlp_revealCount: 0, dlp_exfilBlocked: 0, dlp_bypassLog: [] }, (s) => {
+  chrome.storage.local.get({ dlp_bypassCount: 0, dlp_revealCount: 0, dlp_exfilBlocked: 0, dlp_bypassLog: [], dlp_dailyStats: {} }, (s) => {
     $('stBypass').textContent = String(s.dlp_bypassCount);
     $('stReveal').textContent = String(s.dlp_revealCount);
     $('stExfil').textContent = String(s.dlp_exfilBlocked);
     renderLog(Array.isArray(s.dlp_bypassLog) ? s.dlp_bypassLog : []);
+    renderChart(s.dlp_dailyStats && typeof s.dlp_dailyStats === 'object' ? s.dlp_dailyStats : {});
   });
 }
+
+// Aggregate the per-day map into buckets (day or month) and draw a grouped
+// bar chart as inline SVG (no external chart library — CSP-safe).
+function renderChart(daily) {
+  const days = Object.keys(daily).sort();
+  const host = $('chart');
+  if (days.length === 0) { host.innerHTML = ''; $('chartEmpty').style.display = 'block'; return; }
+  $('chartEmpty').style.display = 'none';
+
+  const buckets = new Map(); // key → {paste,reveal,exfil}
+  for (const d of days) {
+    const key = chartGrouping === 'month' ? d.slice(0, 7) : d;
+    const b = buckets.get(key) || { paste: 0, reveal: 0, exfil: 0 };
+    const v = daily[d] || {};
+    b.paste += v.paste || 0; b.reveal += v.reveal || 0; b.exfil += v.exfil || 0;
+    buckets.set(key, b);
+  }
+  // keep the most recent N buckets so the chart stays readable
+  const N = chartGrouping === 'month' ? 18 : 30;
+  const keys = [...buckets.keys()].sort().slice(-N);
+  const data = keys.map((k) => ({ key: k, ...buckets.get(k) }));
+  const max = Math.max(1, ...data.map((d) => Math.max(d.paste, d.reveal, d.exfil)));
+
+  const W = Math.max(560, data.length * 46);
+  const H = 240, padL = 34, padB = 46, padT = 10;
+  const plotH = H - padB - padT;
+  const groupW = (W - padL - 8) / data.length;
+  const barW = Math.max(3, (groupW - 8) / 3);
+  const COLORS = { paste: '#e02424', reveal: '#c27803', exfil: '#1f6feb' };
+  const y = (v) => padT + plotH - (v / max) * plotH;
+
+  const parts = [];
+  parts.push(`<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" font-family="system-ui,sans-serif" font-size="10">`);
+  // y gridlines + labels (0, mid, max)
+  for (const frac of [0, 0.5, 1]) {
+    const val = Math.round(max * frac);
+    const yy = y(val);
+    parts.push(`<line x1="${padL}" y1="${yy}" x2="${W - 4}" y2="${yy}" stroke="var(--border)" stroke-width="1"/>`);
+    parts.push(`<text x="${padL - 5}" y="${yy + 3}" text-anchor="end" fill="var(--muted)">${val}</text>`);
+  }
+  data.forEach((d, i) => {
+    const gx = padL + i * groupW + 4;
+    ['paste', 'reveal', 'exfil'].forEach((kind, j) => {
+      const v = d[kind];
+      if (v <= 0) return;
+      const bx = gx + j * barW;
+      const by = y(v);
+      parts.push(`<rect x="${bx.toFixed(1)}" y="${by.toFixed(1)}" width="${barW.toFixed(1)}" height="${(padT + plotH - by).toFixed(1)}" fill="${COLORS[kind]}"><title>${d.key} ${kind}: ${v}</title></rect>`);
+    });
+    const label = chartGrouping === 'month' ? d.key : d.key.slice(5); // MM-DD
+    parts.push(`<text x="${(gx + groupW / 2 - 4).toFixed(1)}" y="${H - padB + 14}" text-anchor="middle" fill="var(--muted)" transform="rotate(35 ${(gx + groupW / 2 - 4).toFixed(1)} ${H - padB + 14})">${label}</text>`);
+  });
+  parts.push('</svg>');
+  host.innerHTML = parts.join('');
+}
+
+$('grpDay').addEventListener('click', () => { chartGrouping = 'day'; loadStats(); });
+$('grpMonth').addEventListener('click', () => { chartGrouping = 'month'; loadStats(); });
 
 function renderLog(log) {
   const tbody = $('logTable').querySelector('tbody');
@@ -325,31 +535,91 @@ $('clearLogBtn').addEventListener('click', () => {
   chrome.storage.local.set({ dlp_bypassLog: [] }, () => { loadStats(); banner('Log cleared.'); });
 });
 
-// ── Export / Import ───────────────────────────────────────────────────────────
+// ── Export / Import (YAML) ────────────────────────────────────────────────────
+// The exported file is a COMPLETE snapshot: settings, custom patterns, terms,
+// AND the full built-in library with any edits/disables applied (dlp_builtins).
+// On import the built-in section is diffed against the current shipped library
+// to reconstruct the overrides, so a backup restores the exact effective state.
+function effectiveBuiltins(overrides) {
+  const map = new Map((overrides || []).filter((o) => o && o.id).map((o) => [o.id, o]));
+  return ALL_BUILTINS.map((p) => {
+    const ov = map.get(p.id);
+    return {
+      id: p.id, label: p.label, category: p.category,
+      source: ov && ov.source ? ov.source : p.source,
+      flags: ov && ov.flags ? ov.flags : p.flags,
+      valueGroup: p.valueGroup || 0,
+      enabled: !(ov && ov.disabled),
+    };
+  });
+}
+
+function buildConfigYaml(items) {
+  const config = {};
+  for (const k of CONFIG_KEYS) {
+    if (k === 'dlp_builtinOverrides') continue; // superseded by the full list below
+    config[k] = items[k];
+  }
+  config.dlp_builtins = effectiveBuiltins(items.dlp_builtinOverrides);
+  return DlpYaml.stringify(config);
+}
+
+// Rebuild the compact override list by diffing an exported dlp_builtins array
+// against the current shipped built-ins (matched by id). Unknown ids (version
+// drift) are ignored; unsafe regexes are dropped.
+function overridesFromBuiltins(list) {
+  const shipped = new Map(ALL_BUILTINS.map((p) => [p.id, p]));
+  const overrides = [];
+  for (const b of list) {
+    if (!b || !b.id) continue;
+    const p = shipped.get(b.id);
+    if (!p) continue;
+    const ov = { id: b.id };
+    let changed = false;
+    if (b.enabled === false) { ov.disabled = true; changed = true; }
+    if (b.source && b.source !== p.source) {
+      try { new RegExp(b.source, b.flags || 'g'); } catch (_e) { continue; }
+      if (redosLint(b.source)) continue;
+      ov.source = b.source; changed = true;
+      if (b.flags && b.flags !== p.flags) ov.flags = b.flags;
+    }
+    if (changed) overrides.push(ov);
+  }
+  return overrides;
+}
+
 $('exportBtn').addEventListener('click', () => {
   chrome.storage.local.get(DEFAULTS, (items) => {
-    const config = {};
-    for (const k of CONFIG_KEYS) config[k] = items[k];
-    const payload = { _dlpGuardConfig: 1, exportedAt: new Date().toISOString(), config };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const yaml = `# DLP Guard configuration\n# exported ${new Date().toISOString()}\n${buildConfigYaml(items)}`;
+    const blob = new Blob([yaml], { type: 'text/yaml' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = 'dlp-guard-config.json';
+    a.href = url; a.download = 'dlp-guard-config.yaml';
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
 });
 
+$('copyYamlBtn').addEventListener('click', () => {
+  chrome.storage.local.get(DEFAULTS, (items) => {
+    const yaml = buildConfigYaml(items);
+    navigator.clipboard.writeText(yaml).then(() => banner('YAML copied.'), () => banner('Copy failed.'));
+  });
+});
+
 $('importBtn').addEventListener('click', () => {
   const status = $('importStatus');
-  let parsed;
-  try { parsed = JSON.parse($('importArea').value); }
-  catch (e) { status.className = 'status err'; status.textContent = `Invalid JSON: ${e.message}`; return; }
-  const config = parsed && parsed.config ? parsed.config : parsed;
-  if (!config || typeof config !== 'object') { status.className = 'status err'; status.textContent = 'No config object found.'; return; }
+  let config;
+  try { config = DlpYaml.parse($('importArea').value); }
+  catch (e) { status.className = 'status err'; status.textContent = `Invalid YAML: ${e.message}`; return; }
+  // tolerate an exported wrapper shape { config: {...} } too
+  if (config && config.config && typeof config.config === 'object') config = config.config;
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    status.className = 'status err'; status.textContent = 'No config mapping found.'; return;
+  }
   const clean = {};
   for (const k of CONFIG_KEYS) if (k in config) clean[k] = config[k];
-  // sanitize user patterns: drop any that don't compile or look catastrophic
+  // sanitize custom + built-in override regexes: drop any that don't compile or look catastrophic
   if (Array.isArray(clean.dlp_userPatterns)) {
     clean.dlp_userPatterns = clean.dlp_userPatterns.filter((p) => {
       if (!p || !p.source) return false;
@@ -357,7 +627,20 @@ $('importBtn').addEventListener('click', () => {
       return !redosLint(p.source);
     });
   }
-  if (Object.keys(clean).length === 0) { status.className = 'status err'; status.textContent = 'No recognized settings in that config.'; return; }
+  // The full built-in library (dlp_builtins) is authoritative when present:
+  // reconstruct the override list from it. Otherwise accept a compact
+  // dlp_builtinOverrides list directly.
+  if (Array.isArray(config.dlp_builtins)) {
+    clean.dlp_builtinOverrides = overridesFromBuiltins(config.dlp_builtins);
+  } else if (Array.isArray(clean.dlp_builtinOverrides)) {
+    clean.dlp_builtinOverrides = clean.dlp_builtinOverrides.filter((o) => {
+      if (!o || !o.id) return false;
+      if (!o.source) return true; // disable-only override is fine
+      try { new RegExp(o.source, (o.flags || 'g')); } catch (_e) { return false; }
+      return !redosLint(o.source);
+    });
+  }
+  if (Object.keys(clean).length === 0) { status.className = 'status err'; status.textContent = 'No recognized settings in that YAML.'; return; }
   chrome.storage.local.set(clean, () => {
     status.className = 'status ok';
     status.textContent = `Imported ${Object.keys(clean).length} setting group(s).`;
@@ -368,7 +651,8 @@ $('importBtn').addEventListener('click', () => {
 });
 
 $('resetBtn').addEventListener('click', () => {
-  chrome.storage.local.set({ ...DEFAULTS, dlp_customTerms: [], dlp_userPatterns: [], dlp_disabledSites: [] }, () => {
+  chrome.storage.local.set({ ...DEFAULTS, dlp_cats: { ...CAT_DEFAULTS }, dlp_customTerms: [], dlp_userPatterns: [], dlp_builtinOverrides: [], dlp_disabledSites: [] }, () => {
+    builtinOverrides = [];
     loadAll();
     banner('Reset to defaults.');
   });
@@ -378,7 +662,8 @@ $('resetBtn').addEventListener('click', () => {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
   if (Object.keys(changes).some((k) => k.startsWith('dlp_'))) {
-    if (!/rx|terms|import|site/i.test(document.activeElement?.id || '')) loadAll();
+    // don't reload while the user is typing in an editor field
+    if (!/rx|terms|import|site|bi/i.test(document.activeElement?.id || '')) loadAll();
     else loadStats();
   }
 });

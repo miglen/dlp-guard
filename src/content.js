@@ -22,7 +22,12 @@
     dlp_cats: DlpEngine.CATEGORY_DEFAULTS,
     dlp_customTerms: [],
     dlp_userPatterns: [],
+    dlp_builtinOverrides: [],
     dlp_exfilThreshold: 10,
+    dlp_guardPasswordField: true, // suspend when the page has a password field
+    dlp_guardAuthUrl: true,       // suspend on login/registration URLs
+    dlp_redactInPasswordFields: false, // OFF = let secrets be pasted into pw fields
+    dlp_skipCloudEditors: true,   // suspend inside Docs/365/Notion/… editors
     dlp_disabledSites: [],
   });
 
@@ -36,7 +41,12 @@
     cats: { ...DlpEngine.CATEGORY_DEFAULTS },
     customTerms: [],
     userPatterns: [],
+    builtinOverrides: [],
     exfilThreshold: 10,
+    guardPasswordField: true,
+    guardAuthUrl: true,
+    redactInPasswordFields: false,
+    skipCloudEditors: true,
     disabledSites: [],
     suspendReason: null, // non-null → login/registration page, do nothing
     maskCount: 0,        // secrets currently hidden on this page
@@ -63,22 +73,46 @@
     STATE.cats = { ...DlpEngine.CATEGORY_DEFAULTS, ...(items.dlp_cats || {}) };
     STATE.customTerms = Array.isArray(items.dlp_customTerms) ? items.dlp_customTerms : [];
     STATE.userPatterns = Array.isArray(items.dlp_userPatterns) ? items.dlp_userPatterns : [];
+    STATE.builtinOverrides = Array.isArray(items.dlp_builtinOverrides) ? items.dlp_builtinOverrides : [];
     STATE.exfilThreshold = Number(items.dlp_exfilThreshold) > 0 ? Number(items.dlp_exfilThreshold) : 10;
+    STATE.guardPasswordField = items.dlp_guardPasswordField !== false;
+    STATE.guardAuthUrl = items.dlp_guardAuthUrl !== false;
+    STATE.redactInPasswordFields = items.dlp_redactInPasswordFields === true;
+    STATE.skipCloudEditors = items.dlp_skipCloudEditors !== false;
     STATE.disabledSites = Array.isArray(items.dlp_disabledSites) ? items.dlp_disabledSites : [];
-    DlpEngine.compile(STATE.cats, STATE.customTerms, STATE.userPatterns);
+    DlpEngine.compile(STATE.cats, STATE.customTerms, STATE.userPatterns, STATE.builtinOverrides);
     scanGeneration++;
   }
 
-  // Google Workspace editors do their own paste/DOM handling; rewriting their
-  // editing surface breaks them (the foundation extension skipped them too).
-  // The DOM-selector arm is gated on Google hostnames so an arbitrary page
-  // can't disable protection by mimicking Workspace class names.
-  function isWorkspaceEditor() {
-    if (/(^|\.)docs\.google\.com$/.test(location.hostname)) return true;
-    if (!/\.google\.com$/.test(location.hostname)) return false;
-    return Boolean(document.querySelector(
-      '.kix-appview-editor, .docs-texteventtarget-iframe, [id="docs-editor"]'));
+  // Central suspend check honoring the user's login-safety toggles. Google
+  // Workspace is always skipped (compatibility, not a safety choice).
+  function guardSuspendReason() {
+    return PageGuard.suspendReason({
+      passwordField: STATE.guardPasswordField,
+      authUrl: STATE.guardAuthUrl,
+    }) || (isCloudEditor() ? 'cloud document editor (compatibility skip)' : null);
   }
+
+  // Rich cloud document editors do their own paste/DOM handling; rewriting
+  // their editing surface can corrupt the document. When "skip cloud editors"
+  // is on (default), DLP Guard suspends on these hosts. Each entry is a
+  // hostname test so an arbitrary page can't spoof it via class names.
+  function isCloudEditor() {
+    if (!STATE.skipCloudEditors) return false;
+    const h = location.hostname;
+    if (/(^|\.)docs\.google\.com$/.test(h)) return true;                 // Google Workspace
+    if (/(^|\.)(officeapps\.live\.com|office\.com|office365\.com|sharepoint\.com|onedrive\.live\.com)$/.test(h)) return true; // Microsoft 365 / SharePoint / OneDrive
+    if (/(^|\.)(word|excel|powerpoint|onenote)\.office\.com$/.test(h)) return true;
+    if (/(^|\.)notion\.so$/.test(h) || /(^|\.)notion\.site$/.test(h)) return true; // Notion
+    if (/(^|\.)quip\.com$/.test(h)) return true;                          // Quip
+    if (/(^|\.)dropbox\.com$/.test(h) && /\/(paper|scl)\//.test(location.pathname)) return true; // Dropbox Paper
+    if (/(^|\.)(coda\.io)$/.test(h)) return true;                         // Coda
+    if (/(^|\.)(zoho|zohopublic)\.(com|eu|in)$/.test(h) && /(writer|sheet|show)/.test(location.pathname + location.hostname)) return true; // Zoho
+    if (/(^|\.)(confluence|atlassian)\.net$/.test(h)) return true;        // Confluence
+    return false;
+  }
+  // kept name for existing call sites
+  function isWorkspaceEditor() { return isCloudEditor(); }
 
   function siteDisabled() {
     return STATE.disabledSites.includes(location.hostname);
@@ -116,8 +150,7 @@
   // ── Login/registration page guard ──────────────────────────────────────────
 
   function evaluateGuard(initial) {
-    const reason = PageGuard.suspendReason() ||
-      (isWorkspaceEditor() ? 'Google Workspace editor (compatibility skip)' : null);
+    const reason = guardSuspendReason();
     if (reason && !STATE.suspendReason) {
       STATE.suspendReason = reason;
       scanGeneration++; // kill in-flight scans immediately
@@ -379,9 +412,7 @@
   // target is not editable (then we must not touch the event or the DOM).
   function getEditableRoot(target) {
     if (target instanceof HTMLTextAreaElement) return target;
-    if (target instanceof HTMLInputElement) {
-      return PageGuard.isPasswordInput(target) ? null : target;
-    }
+    if (target instanceof HTMLInputElement) return target;
     let el = target instanceof Element ? target : target?.parentElement;
     let root = null;
     while (el) {
@@ -389,6 +420,16 @@
       el = el.parentElement;
     }
     return root;
+  }
+
+  // Should a paste into this target be left untouched (raw passes through)?
+  // By default password inputs and login-form fields are skipped, so you can
+  // freely paste passwords / API keys into them. Turning on
+  // "redact in password fields" removes that exemption.
+  function pasteExempt(target, editable) {
+    if (STATE.redactInPasswordFields) return false;
+    if (PageGuard.isPasswordInput(editable)) return true;
+    return PageGuard.inPasswordForm(target);
   }
 
   /** Last redacted paste, kept so the user can deliberately bypass it.
@@ -407,8 +448,8 @@
     earlyPaste = null;
     if (!ep.editable.isConnected) return;
     const redact = isActive() && STATE.redactPaste &&
-      !PageGuard.suspendReason() && !isWorkspaceEditor() &&
-      !PageGuard.inPasswordForm(ep.editable);
+      !guardSuspendReason() &&
+      !pasteExempt(ep.target, ep.editable);
     if (!redact) {
       insertText(ep.editable, ep.raw);
       return;
@@ -441,19 +482,21 @@
       if (!editable || !raw) return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      earlyPaste = { editable, raw };
+      earlyPaste = { target: event.target, editable, raw };
       return;
     }
     if (!STATE.enabled || !STATE.redactPaste || siteDisabled()) return;
     // Re-check the guard synchronously — a login modal may have appeared
     // within the observer debounce window, or a password field may currently
     // be toggled to type="text".
-    if (STATE.suspendReason || PageGuard.suspendReason() || isWorkspaceEditor()) return;
+    if (STATE.suspendReason || guardSuspendReason()) return;
 
     const target = event.target;
     const editable = getEditableRoot(target);
     if (!editable) return; // nothing will be inserted; don't touch the page
-    if (PageGuard.inPasswordForm(target)) return;
+    // Password fields / login forms pass through raw unless the user opted into
+    // redacting there — this is what lets you paste passwords and API keys in.
+    if (pasteExempt(target, editable)) return;
 
     const raw = event.clipboardData?.getData('text');
     if (!raw) return;

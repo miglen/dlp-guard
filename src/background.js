@@ -34,6 +34,7 @@ function paintBadge(tabId, total) {
 // increments a persistent counter and appends to a rolling audit log.
 // Only kind/host/count/time are recorded — never the secret values.
 const MAX_BYPASS_LOG = 200;
+const MAX_DAILY_DAYS = 400; // ~13 months of per-day aggregates
 let bypassQueue = Promise.resolve();
 function recordBypass(kind, host, secrets) {
   bypassQueue = bypassQueue.then(async () => {
@@ -42,15 +43,33 @@ function recordBypass(kind, host, secrets) {
       dlp_revealCount: 0,
       dlp_exfilBlocked: 0,
       dlp_bypassLog: [],
+      dlp_dailyStats: {},
     });
     const update = {};
     if (kind === 'paste') update.dlp_bypassCount = items.dlp_bypassCount + 1;
     else if (kind === 'exfil') update.dlp_exfilBlocked = items.dlp_exfilBlocked + 1;
     else update.dlp_revealCount = items.dlp_revealCount + 1;
+
+    const now = new Date();
     const log = Array.isArray(items.dlp_bypassLog) ? items.dlp_bypassLog : [];
-    log.push({ t: Date.now(), kind, host: String(host || ''), secrets: secrets | 0 });
+    log.push({ t: now.getTime(), kind, host: String(host || ''), secrets: secrets | 0 });
     if (log.length > MAX_BYPASS_LOG) log.splice(0, log.length - MAX_BYPASS_LOG);
     update.dlp_bypassLog = log;
+
+    // Per-day aggregates survive the log's 200-entry cap so the graph keeps
+    // full history. Key is local-date YYYY-MM-DD; kind counts within each day.
+    const daily = (items.dlp_dailyStats && typeof items.dlp_dailyStats === 'object') ? items.dlp_dailyStats : {};
+    const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const bucket = daily[day] || { paste: 0, reveal: 0, exfil: 0 };
+    const k = kind === 'paste' ? 'paste' : (kind === 'exfil' ? 'exfil' : 'reveal');
+    bucket[k] = (bucket[k] || 0) + 1;
+    daily[day] = bucket;
+    const days = Object.keys(daily).sort();
+    if (days.length > MAX_DAILY_DAYS) {
+      for (const d of days.slice(0, days.length - MAX_DAILY_DAYS)) delete daily[d];
+    }
+    update.dlp_dailyStats = daily;
+
     await chrome.storage.local.set(update);
   }).catch(() => {});
 }
@@ -105,6 +124,11 @@ chrome.runtime.onInstalled.addListener(() => {
       dlp_cats: { token: true, assignment: true, privatekey: true, custom: true, user: true, pii: false, infra: false, generic: false },
       dlp_customTerms: [],
       dlp_userPatterns: [],
+      dlp_builtinOverrides: [],
+      dlp_guardPasswordField: true,
+      dlp_guardAuthUrl: true,
+      dlp_redactInPasswordFields: false,
+      dlp_skipCloudEditors: true,
       dlp_disabledSites: [],
     };
     const missing = {};

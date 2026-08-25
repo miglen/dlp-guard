@@ -344,6 +344,48 @@ WRuPspPXIAHPKrjEHkUsgDZHW/V0fJWbIjJarw==
   expect('user patterns cleared', DlpEngine.findRanges('ACME-123456').length === 0, '');
 }
 
+// ── 15d. built-in pattern overrides (disable / edit source) ──────────────────
+{
+  const CATS = { token: true, assignment: true, privatekey: true, custom: true, user: true, pii: false, infra: false, generic: false };
+  DlpEngine.compile(CATS);
+  const akia = 'creds AKIAIOSFODNN7EXAMPLE here';
+  expect('AWS client id detected by default', DlpEngine.findRanges(akia).length === 1, '');
+  // find the built-in id(s) for AKIA-matching token patterns
+  const builtins = DlpEngine.builtins();
+  const awsIds = builtins.filter((b) => b.category === 'token' && /AKIA/.test(b.source));
+  expect('AWS client-id builtin has stable id', awsIds.length >= 1 && awsIds.every((b) => /#\d+$/.test(b.id)), JSON.stringify(awsIds.map((b) => b.id)));
+  // disable them → no longer detected
+  DlpEngine.compile(CATS, [], [], awsIds.map((b) => ({ id: b.id, disabled: true })));
+  expect('disabled builtins no longer match', DlpEngine.findRanges(akia).length === 0, JSON.stringify(DlpEngine.findRanges(akia)));
+  // edit the EMAIL builtin source and confirm the override applies
+  DlpEngine.compile({ ...CATS, pii: true });
+  const email = builtins.find((b) => b.category === 'pii' && b.label === 'EMAIL');
+  DlpEngine.compile({ ...CATS, pii: true }, [], [], [{ id: email.id, source: 'ZZ_[a-z]+_ZZ', flags: 'g' }]);
+  expect('edited builtin uses new source', DlpEngine.findRanges('x ZZ_hello_ZZ y').length === 1, '');
+  expect('edited builtin drops old behavior', DlpEngine.findRanges('mail a@b.com y').length === 0, '');
+  DlpEngine.compile(CATS);
+}
+
+// ── 15e. user patterns with custom categories ────────────────────────────────
+{
+  const CATS = { token: true, assignment: true, privatekey: true, custom: true, user: true, pii: false, infra: false, generic: false };
+  const ups = [
+    { id: 'c1', label: 'ACME_ID', category: 'mycompany', source: 'ACME-\\d{5,}', flags: 'g', valueGroup: 0, mask: 'stars', enabled: true },
+  ];
+  DlpEngine.compile(CATS, [], ups);
+  expect('custom-category pattern runs by default', DlpEngine.findRanges('id ACME-12345 x').length === 1, '');
+  // disabling that category via cats flag turns it off
+  DlpEngine.compile({ ...CATS, mycompany: false }, [], ups);
+  expect('custom category can be disabled', DlpEngine.findRanges('id ACME-12345 x').length === 0, '');
+  // a custom-category pattern wins overlap against a built-in
+  DlpEngine.compile(CATS, [], [
+    { id: 'c2', label: 'WHOLE', category: 'mine', source: 'AKIA[0-9A-Z]{16}\\b', flags: 'g', valueGroup: 0, mask: 'stars', enabled: true },
+  ]);
+  const r = DlpEngine.findRanges('k AKIAIOSFODNN7EXAMPLE z');
+  expect('custom-category range present', r.length >= 1, JSON.stringify(r));
+  DlpEngine.compile(CATS);
+}
+
 // ── 16. exfiltration threshold sanity (engine side) ───────────────────────────
 {
   const bulk = Array.from({ length: 12 }, (_, i) => `key${i}: AKIAIOSFODNN7EXAMPL${i % 10}`).join('\n');

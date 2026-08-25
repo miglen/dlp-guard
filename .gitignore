@@ -4,3 +4,5 @@ node_modules/
 *.crx
 *.pem
 ODEOILOOELKODAHBBDOKBOLLGAHDCAAG_3_6_1_0/
+trufflehog/
+gitleaks/

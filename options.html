@@ -81,8 +81,8 @@
 
   <nav class="tabs" id="tabs">
     <button data-tab="general" class="active">General</button>
-    <button data-tab="detections">Detections</button>
-    <button data-tab="regex">Custom regex</button>
+    <button data-tab="detections">Categories</button>
+    <button data-tab="patterns">Patterns</button>
     <button data-tab="terms">Protected terms</button>
     <button data-tab="sites">Sites</button>
     <button data-tab="stats">Stats &amp; log</button>
@@ -102,15 +102,19 @@
     </div>
     <div class="card">
       <h2>Login-page safety</h2>
-      <p class="hint">DLP Guard always suspends itself on login, password, and registration pages, and inside Google Workspace editors. This is not configurable by design.</p>
+      <p class="hint">By default DLP Guard suspends itself on login/registration pages so it never touches credential flows. You can relax that here — at your own risk.</p>
+      <div class="row"><label>Suspend on pages with a password field<span class="desc">Turn off to keep protection running on pages that merely contain a login box</span></label><input type="checkbox" data-setting="dlp_guardPasswordField"></div>
+      <div class="row"><label>Suspend on login / registration URLs<span class="desc">Hostnames and paths like /login, /signup, accounts.*</span></label><input type="checkbox" data-setting="dlp_guardAuthUrl"></div>
+      <div class="row"><label>Redact secrets pasted into password fields<span class="desc">Off (default) lets you paste passwords and API keys into password inputs. On also masks them there.</span></label><input type="checkbox" data-setting="dlp_redactInPasswordFields"></div>
+      <div class="row"><label>Skip cloud document editors<span class="desc">Suspend inside Google Docs/Sheets/Slides, Microsoft 365, SharePoint/OneDrive, Notion, Quip, Coda, Dropbox Paper, Zoho, Confluence — they manage their own editing and masking can corrupt the document. Turn off to run there anyway.</span></label><input type="checkbox" data-setting="dlp_skipCloudEditors"></div>
     </div>
   </section>
 
-  <!-- DETECTIONS -->
+  <!-- CATEGORIES -->
   <section class="tab" id="tab-detections">
     <div class="card">
-      <h2>Built-in detection categories</h2>
-      <p class="hint">The mask style is fixed per category. Noisy categories are off by default.</p>
+      <h2>Detection categories</h2>
+      <p class="hint">Bulk on/off for whole categories. Individual patterns are managed in the Patterns tab. Noisy categories are off by default.</p>
       <div class="row"><label>API keys &amp; tokens <span class="pill" id="cnt-token">–</span><span class="desc">AWS, Slack, Stripe, OpenAI, Anthropic, GitHub, JWT, crypto keys…</span></label><input type="checkbox" data-cat="token"></div>
       <div class="row"><label>key = value assignments <span class="pill" id="cnt-assignment">–</span><span class="desc">Hides the value after <code>api_key:</code> / <code>SECRET=</code></span></label><input type="checkbox" data-cat="assignment"></div>
       <div class="row"><label>Private key blocks <span class="pill" id="cnt-privatekey">–</span><span class="desc">Whole PEM/OpenSSH/PGP armor blocks</span></label><input type="checkbox" data-cat="privatekey"></div>
@@ -118,32 +122,46 @@
       <div class="row"><label>Cloud endpoints <span class="pill" id="cnt-infra">–</span><span class="desc">*.amazonaws.com, *.cloudfront.net… (noisy)</span></label><input type="checkbox" data-cat="infra"></div>
       <div class="row"><label>Generic URLs / UUIDs <span class="pill" id="cnt-generic">–</span><span class="desc">Broad catch-alls (very noisy)</span></label><input type="checkbox" data-cat="generic"></div>
     </div>
+    <div class="card" id="customCatsCard" style="display:none;">
+      <h2>Your categories</h2>
+      <p class="hint">Categories you created for custom patterns. Toggle a whole one off here.</p>
+      <div id="customCatsRows"></div>
+    </div>
   </section>
 
-  <!-- CUSTOM REGEX -->
-  <section class="tab" id="tab-regex">
+  <!-- PATTERNS (built-in + custom, unified) -->
+  <section class="tab" id="tab-patterns">
     <div class="card">
-      <h2>Your regex patterns</h2>
-      <p class="hint">Add detectors for anything the built-ins miss — internal ID formats, ticket numbers, your own token shapes. Patterns run in the isolated content-script world (never exposed to the page). Test before saving; a catastrophic regex can slow pages down.</p>
+      <h2 id="pxFormTitle">Add a pattern</h2>
+      <p class="hint">Edit any built-in detector or add your own — internal ID formats, ticket numbers, token shapes. New patterns can go in a new category (just type its name). Everything runs in the isolated content-script world, never exposed to the page. Edited regexes are screened for catastrophic backtracking before saving.</p>
       <div class="grid2">
-        <div><label>Label (shown on the mask)</label><input type="text" id="rxLabel" placeholder="INTERNAL_ID" maxlength="40"></div>
-        <div><label>Flags</label><input type="text" id="rxFlags" placeholder="g or gi" value="g" maxlength="8"></div>
-        <div class="full"><label>Regular expression (JS syntax)</label><input type="text" id="rxSource" class="mono" placeholder="ACME-\\d{6,}"></div>
-        <div><label>Mask style</label><select id="rxMask"><option value="stars">Full stars</option><option value="affix">Keep prefix/suffix</option></select></div>
-        <div><label>Value group <span title="0 = mask the whole match; N = mask only capture group N">(?)</span></label><input type="number" id="rxGroup" min="0" max="9" value="0" style="width:70px;"></div>
-        <div class="full"><label>Test against sample text</label><input type="text" id="rxTest" class="mono" placeholder="Paste a sample line to see what matches"></div>
+        <div><label>Label (shown on the mask)</label><input type="text" id="pxLabel" placeholder="INTERNAL_ID" maxlength="40"></div>
+        <div><label>Category</label><input type="text" id="pxCategory" list="pxCatList" placeholder="token, pii, or a new name…" maxlength="30"><datalist id="pxCatList"></datalist></div>
+        <div class="full"><label>Regular expression (JS syntax)</label><input type="text" id="pxSource" class="mono" placeholder="ACME-\\d{6,}"></div>
+        <div><label>Flags</label><input type="text" id="pxFlags" class="mono" placeholder="g or gi" value="g" maxlength="8"></div>
+        <div><label>Mask style</label><select id="pxMask"><option value="stars">Full stars</option><option value="affix">Keep prefix/suffix</option></select></div>
+        <div><label>Value group <span title="0 = mask the whole match; N = mask only capture group N">(?)</span></label><input type="number" id="pxGroup" min="0" max="9" value="0" style="width:70px;"></div>
+        <div class="full"><label>Test against sample text</label><input type="text" id="pxTest" class="mono" placeholder="Paste a sample line to see what matches"></div>
       </div>
-      <div class="status" id="rxStatus"></div>
+      <div class="status" id="pxStatus"></div>
       <div class="toolbar">
-        <button class="btn secondary small" id="rxTestBtn">Test</button>
-        <button class="btn small" id="rxAddBtn">Add pattern</button>
-        <button class="btn secondary small" id="rxCancelBtn" style="display:none;">Cancel edit</button>
+        <button class="btn secondary small" id="pxTestBtn">Test</button>
+        <button class="btn small" id="pxSaveBtn">Add pattern</button>
+        <button class="btn secondary small" id="pxResetBtn" style="display:none;">Reset to original</button>
+        <button class="btn secondary small" id="pxCancelBtn" style="display:none;">Cancel</button>
       </div>
     </div>
     <div class="card">
-      <h2>Saved patterns (<span id="rxCount">0</span>)</h2>
-      <table id="rxTable"><thead><tr><th>On</th><th>Label</th><th>Pattern</th><th>Mask</th><th></th></tr></thead><tbody></tbody></table>
-      <div class="empty" id="rxEmpty">No custom patterns yet.</div>
+      <h2>All patterns</h2>
+      <div class="toolbar" style="margin-top:0; margin-bottom:10px;">
+        <input type="text" id="pxSearch" placeholder="Search label or regex…" style="flex:1; min-width:200px;">
+        <select id="pxFilterCat"><option value="">All categories</option></select>
+        <select id="pxFilterType"><option value="">All</option><option value="custom">Custom only</option><option value="builtin">Built-in only</option><option value="changed">Changed only</option></select>
+      </div>
+      <div class="empty" id="pxCount"></div>
+      <div class="logscroll" style="max-height:460px;">
+        <table id="pxTable"><thead><tr><th>On</th><th>Label</th><th>Category</th><th>Regex</th><th>Type</th><th></th></tr></thead><tbody></tbody></table>
+      </div>
     </div>
   </section>
 
@@ -183,6 +201,23 @@
       <div class="toolbar"><button class="btn secondary small" id="clearStatsBtn">Reset counters</button></div>
     </div>
     <div class="card">
+      <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+        <h2 style="margin:0;">Activity over time</h2>
+        <div class="toolbar" style="margin:0;">
+          <button class="btn secondary small" id="grpDay">Per day</button>
+          <button class="btn secondary small" id="grpMonth">Per month</button>
+        </div>
+      </div>
+      <p class="hint" style="margin-top:6px;">Paste bypasses, mask reveals, and blocked bulk copies. Aggregated locally per day (kept ~13 months).</p>
+      <div style="display:flex; gap:16px; font-size:12px; margin:4px 0 8px;">
+        <span><span style="display:inline-block;width:10px;height:10px;background:#e02424;border-radius:2px;"></span> bypass</span>
+        <span><span style="display:inline-block;width:10px;height:10px;background:#c27803;border-radius:2px;"></span> reveal</span>
+        <span><span style="display:inline-block;width:10px;height:10px;background:#1f6feb;border-radius:2px;"></span> blocked</span>
+      </div>
+      <div id="chart" style="overflow-x:auto;"></div>
+      <div class="empty" id="chartEmpty">No activity recorded yet.</div>
+    </div>
+    <div class="card">
       <h2>Audit log <span class="pill" id="logCount">0</span></h2>
       <p class="hint">Rolling record of bypasses and blocks. Records time, host, kind, and secret count only — never the values.</p>
       <div class="logscroll"><table id="logTable"><thead><tr><th>When</th><th>Kind</th><th>Host</th><th>Secrets</th></tr></thead><tbody></tbody></table></div>
@@ -194,14 +229,14 @@
   <!-- BACKUP -->
   <section class="tab" id="tab-io">
     <div class="card">
-      <h2>Export configuration</h2>
-      <p class="hint">Download all settings, custom patterns, and protected terms as a JSON file. Counters and the audit log are not included.</p>
-      <div class="toolbar"><button class="btn small" id="exportBtn">Export JSON</button></div>
+      <h2>Export configuration (YAML)</h2>
+      <p class="hint">Download a complete YAML snapshot: all settings, custom patterns, protected terms, and the full built-in regex library with your edits applied. Counters and the audit log are not included.</p>
+      <div class="toolbar"><button class="btn small" id="exportBtn">Export YAML</button><button class="btn secondary small" id="copyYamlBtn">Copy to clipboard</button></div>
     </div>
     <div class="card">
-      <h2>Import configuration</h2>
-      <p class="hint">Paste an exported JSON config and apply it. This replaces your current settings, custom patterns, and terms.</p>
-      <textarea id="importArea" rows="8" class="mono" placeholder='{ "dlp_cats": { … }, "dlp_userPatterns": [ … ] }'></textarea>
+      <h2>Import configuration (YAML)</h2>
+      <p class="hint">Paste an exported YAML config and apply it. This replaces your current settings, custom patterns, terms, and overrides. Custom and edited regexes are re-screened; unsafe ones are dropped.</p>
+      <textarea id="importArea" rows="10" class="mono" placeholder="dlp_cats:&#10;  token: true&#10;  pii: false&#10;dlp_userPatterns:&#10;  - label: TICKET&#10;    source: ..."></textarea>
       <div class="toolbar"><button class="btn small" id="importBtn">Import &amp; apply</button><span class="status" id="importStatus"></span></div>
     </div>
     <div class="card">
@@ -214,6 +249,8 @@
 
 <script src="src/patterns.generated.js"></script>
 <script src="src/patterns.extra.js"></script>
+<script src="src/engine.js"></script>
+<script src="src/yaml.js"></script>
 <script src="src/options.js"></script>
 </body>
 </html>

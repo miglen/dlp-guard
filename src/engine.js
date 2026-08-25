@@ -33,18 +33,43 @@ const DlpEngine = (() => {
     return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
-  function compile(enabledCategories, customTerms = [], userPatterns = []) {
-    compiled = [];
+  // Stable id for a built-in pattern so the options page can target it for
+  // enable/disable/edit overrides. category + label + occurrence index makes
+  // it stable across sessions (the generated list order is deterministic).
+  function builtinList() {
     const extra = typeof DLP_EXTRA_PATTERNS !== 'undefined' ? DLP_EXTRA_PATTERNS : [];
-    for (const p of [...DLP_PATTERNS, ...extra]) {
+    const all = [...DLP_PATTERNS, ...extra];
+    const seen = new Map();
+    return all.map((p) => {
+      const base = `${p.category}:${p.label}`;
+      const n = (seen.get(base) || 0) + 1;
+      seen.set(base, n);
+      return { ...p, id: `${base}#${n}` };
+    });
+  }
+
+  function compile(enabledCategories, customTerms = [], userPatterns = [], builtinOverrides = []) {
+    compiled = [];
+    // overrides: array of { id, disabled?, source?, flags? } → map by id
+    const ovMap = new Map();
+    if (Array.isArray(builtinOverrides)) {
+      for (const o of builtinOverrides) if (o && o.id) ovMap.set(o.id, o);
+    }
+    for (const p of builtinList()) {
       if (!enabledCategories[p.category]) continue;
+      const ov = ovMap.get(p.id);
+      if (ov && ov.disabled) continue;
+      const source = ov && ov.source ? ov.source : p.source;
+      const flags = ov && ov.flags ? ov.flags : p.flags;
       try {
         compiled.push({
-          re: new RegExp(p.source, p.flags),
+          re: new RegExp(source, flags),
           label: p.label,
           category: p.category,
           valueGroup: p.valueGroup,
-          lit: p.lit || null, // required literal word — cheap indexOf gate
+          // an edited source may no longer contain the original literal — only
+          // keep the gate when the source is unchanged
+          lit: (ov && ov.source) ? null : (p.lit || null),
           validate: typeof p.validate === 'function' ? p.validate : null,
           mask: p.mask || null, // per-pattern mask-style override ('stars')
         });
@@ -74,13 +99,17 @@ const DlpEngine = (() => {
         } catch (_e) { /* skip unusable term */ }
       }
     }
-    // User-defined patterns from the options page. category 'user' is always
-    // on; a per-pattern enabled:false skips it. These are the user's own
-    // config (not page content), but a pathological regex could still slow
-    // pages — the options page compile-tests + time-guards them on save.
+    // User-defined patterns from the options page. Each may carry its own
+    // category (including a brand-new one the user names); a category is run
+    // unless it is explicitly disabled, and a per-pattern enabled:false skips
+    // that one. These are the user's own config (not page content), but a
+    // pathological regex could still slow pages — the options page
+    // compile-tests + time-guards them on save.
     if (Array.isArray(userPatterns)) {
       for (const up of userPatterns) {
         if (!up || up.enabled === false || !up.source) continue;
+        const cat = (up.category && String(up.category).trim()) || 'user';
+        if (enabledCategories[cat] === false) continue;
         try {
           const vg = Number(up.valueGroup) > 0 ? Number(up.valueGroup) : 0;
           let flags = String(up.flags || '').replace(/[^gimsuy]/g, '');
@@ -89,7 +118,7 @@ const DlpEngine = (() => {
           compiled.push({
             re: new RegExp(up.source, flags),
             label: String(up.label || 'CUSTOM').toUpperCase().replace(/[^A-Z0-9]+/g, '_').slice(0, 40) || 'CUSTOM',
-            category: 'user',
+            category: cat,
             valueGroup: vg,
             lit: null,
             validate: null,
@@ -159,13 +188,17 @@ const DlpEngine = (() => {
   // e.g. AWS_ACCESS_KEY_ID="ASIA…" keeps its identifiable prefix rather than
   // getting the assignment pattern's full-star mask.
   const CATEGORY_PRIORITY = { user: 0, custom: 1, token: 2, privatekey: 3, assignment: 4, pii: 5, infra: 6, generic: 7 };
+  // A user-defined category the user invented isn't in the map; give it high
+  // precedence (1.5, just under the built-in 'user'/'custom') so a pattern the
+  // user deliberately added wins overlaps against the shipped built-ins.
+  const catPriority = (c) => (c in CATEGORY_PRIORITY ? CATEGORY_PRIORITY[c] : 1.5);
 
   // Sort by start; overlapping ranges are merged (extended), never dropped —
   // a partially-overlapping detection must not leave its tail unmasked.
   function mergeRanges(ranges) {
     ranges.sort((a, b) =>
       a.start - b.start || b.end - a.end ||
-      (CATEGORY_PRIORITY[a.category] ?? 9) - (CATEGORY_PRIORITY[b.category] ?? 9));
+      catPriority(a.category) - catPriority(b.category));
     const out = [];
     let lastEnd = -1;
     for (const r of ranges) {
@@ -242,5 +275,12 @@ const DlpEngine = (() => {
   return Object.freeze({
     CATEGORY_DEFAULTS, compile, findRanges, redactString, maskValue,
     minTextLen: () => minLen,
+    // Options page: the built-in patterns with stable ids, for per-regex
+    // enable/disable/edit. Returns plain descriptors (no compiled RegExp).
+    builtins: () => builtinList().map((p) => ({
+      id: p.id, label: p.label, category: p.category,
+      source: p.source, flags: p.flags, valueGroup: p.valueGroup || 0,
+      hasValidator: typeof p.validate === 'function',
+    })),
   });
 })();

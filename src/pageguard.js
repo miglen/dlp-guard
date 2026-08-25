@@ -69,11 +69,18 @@ const PageGuard = (() => {
   // NOTE: document.title is deliberately NOT a signal — on AI chat sites the
   // title is the conversation name, and chatting about passwords must not
   // disable protection.
-  function suspendReason() {
-    if (hasPasswordField()) return 'password field on page';
-    if (urlLooksLikeAuth()) return 'login/registration URL';
+  // opts lets the user relax the guard from the options page:
+  //   { passwordField=true, authUrl=true }
+  // Both default ON — the safe default is to suspend on either signal.
+  function suspendReason(opts) {
+    const o = opts || {};
+    if (o.passwordField !== false && hasPasswordField()) return 'password field on page';
+    if (o.authUrl !== false && urlLooksLikeAuth()) return 'login/registration URL';
     return null;
   }
 
-  return Object.freeze({ suspendReason, inPasswordForm, isPasswordInput });
+  return Object.freeze({
+    suspendReason, inPasswordForm, isPasswordInput,
+    hasPasswordField, urlLooksLikeAuth,
+  });
 })();

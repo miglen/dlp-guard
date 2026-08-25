@@ -82,25 +82,39 @@ DOM or to storage), and only *counts* are sent to the service worker for the bad
   blocked: the clipboard receives a notice instead and the block is counted
   (popup → Bypass stats → "Bulk copies blocked"). Toggleable; normal copies with a
   secret or two are never touched.
-- **Google Workspace compatibility** — Docs/Sheets/Slides do their own paste and DOM
-  handling, so DLP Guard suspends itself there (same behavior as the foundation
-  extension) rather than corrupting the editor.
 - **Per-site disable** and a global kill switch in the popup; badge shows the number of
   secrets hidden/redacted on the current tab.
+- **Configurable login-page safety** — the suspension is on by default but can be
+  relaxed in the options page: suspend-on-password-field and suspend-on-auth-URL are
+  independent toggles, and *Redact secrets pasted into password fields* (off by
+  default) lets you freely paste passwords and API keys into password inputs.
+- **Cloud-editor compatibility** — DLP Guard suspends inside rich cloud document
+  editors that manage their own editing (Google Docs/Sheets/Slides, Microsoft 365,
+  SharePoint/OneDrive, Notion, Quip, Coda, Dropbox Paper, Zoho, Confluence), matched by
+  hostname so pages can't spoof it. Toggleable in the options page.
+- **Compact popup** — status, the two everyday toggles (hide on pages, redact on
+  paste), the per-site switch, a one-line bypass summary, and a button to the full
+  settings. Everything else lives in the options page.
 - **Advanced settings page** (popup → *Advanced settings*, or the extension's Options)
   — a tabbed UI for everything:
-  - **General** — all behavior toggles plus the exfiltration threshold
-  - **Detections** — enable/disable each built-in category, with live pattern counts
-  - **Custom regex** — add your own detectors (label, pattern, flags, value-capture
-    group, mask style), test them against sample text, edit/enable/delete. Every regex
-    is compile-checked and screened for catastrophic backtracking (static structural
-    lint + a bounded timing probe) before it can be saved, so a bad pattern can't hang
-    your pages. User patterns run only in the isolated content-script world.
+  - **General** — all behavior toggles, exfiltration threshold, and login-page safety
+  - **Categories** — bulk enable/disable each built-in category, with live counts;
+    plus any categories you invented for your own patterns
+  - **Patterns** — one unified table of *every* detector, built-in and custom. Edit any
+    built-in's regex (stored as an override, Reset restores the original), toggle one
+    off, or add your own — with a label, a category (including a brand-new one you
+    name), flags, value-capture group, and mask style. Test against sample text. Every
+    regex is compile-checked and screened for catastrophic backtracking (static
+    structural lint + a bounded timing probe) before it can be saved, so a bad pattern
+    can't hang your pages. All patterns run only in the isolated content-script world.
   - **Protected terms** — the custom-term editor with more room
   - **Sites** — manage the disabled-site list
-  - **Stats & log** — lifetime counters and the full audit log, with reset/clear
-  - **Backup** — export the whole configuration to a JSON file and import it back
-    (import re-screens any custom regexes and drops unsafe ones)
+  - **Stats & log** — lifetime counters, an activity graph (bypasses/reveals/blocks per
+    day or per month, aggregated locally), and the full audit log, with reset/clear
+  - **Backup** — export the **complete** configuration to a **YAML** file — every
+    setting, custom pattern, protected term, and the full built-in regex library with
+    your edits applied — and import it back (import re-screens custom and edited
+    regexes and drops unsafe ones, and reconstructs built-in overrides from the file)
 
 ## Install (test it now)
 
