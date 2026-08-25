@@ -282,9 +282,47 @@ const DlpEngine = (() => {
     return { text: out, count: ranges.length };
   }
 
+  // Default file types worth scanning before an AI-chatbot upload: text and
+  // credential files. Binary office/image formats are deliberately excluded
+  // (they need format-specific parsers, out of scope for a text scan).
+  const FILE_EXTENSIONS_DEFAULT = Object.freeze([
+    'env', 'ini', 'cfg', 'conf', 'config', 'properties', 'toml', 'yaml', 'yml',
+    'json', 'json5', 'xml', 'txt', 'text', 'md', 'csv', 'tsv', 'log',
+    'pem', 'key', 'ppk', 'pub', 'crt', 'cer', 'asc', 'gpg',
+    'sh', 'bash', 'zsh', 'fish', 'bat', 'cmd', 'ps1',
+    'py', 'js', 'mjs', 'cjs', 'ts', 'jsx', 'tsx', 'rb', 'go', 'rs', 'java',
+    'kt', 'cs', 'php', 'pl', 'lua', 'sql', 'tf', 'tfvars', 'hcl',
+    'npmrc', 'netrc', 'htpasswd', 'credentials', 'dockercfg', 'kubeconfig',
+    'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519',
+  ]);
+
+  // Should this file be read+scanned given the user's config?
+  // exts: array of extensions or bare filenames (empty = scan any text file).
+  // maxBytes: skip files larger than this. Pure — no DOM/file access.
+  function shouldScanFile(name, sizeBytes, exts, maxBytes) {
+    if (typeof sizeBytes === 'number' && maxBytes > 0 && sizeBytes > maxBytes) return false;
+    const n = String(name || '').toLowerCase();
+    if (!Array.isArray(exts) || exts.length === 0) return true; // scan all under size
+    for (let e of exts) {
+      e = String(e).toLowerCase().trim().replace(/^\./, '');
+      if (!e) continue;
+      if (n === e || n.endsWith('.' + e)) return true;
+    }
+    return false;
+  }
+
+  // Cheap binary sniff: a run of NUL bytes means it's not text worth scanning.
+  function looksBinary(text) {
+    const n = Math.min(text.length, 8192);
+    let nul = 0;
+    for (let i = 0; i < n; i++) if (text.charCodeAt(i) === 0 && ++nul > 1) return true;
+    return false;
+  }
+
   return Object.freeze({
     CATEGORY_DEFAULTS, compile, findRanges, redactString, maskValue,
     minTextLen: () => minLen,
+    FILE_EXTENSIONS_DEFAULT, shouldScanFile, looksBinary,
     // Options page: the built-in patterns with stable ids, for per-regex
     // enable/disable/edit. Returns plain descriptors (no compiled RegExp).
     builtins: () => builtinList().map((p) => ({

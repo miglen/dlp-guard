@@ -404,6 +404,27 @@ WRuPspPXIAHPKrjEHkUsgDZHW/V0fJWbIjJarw==
   DlpEngine.compile(CATS);
 }
 
+// ── 15g. file-upload scan helpers ─────────────────────────────────────────────
+{
+  const exts = DlpEngine.FILE_EXTENSIONS_DEFAULT;
+  const MB = 1024 * 1024;
+  expect('scans .env', DlpEngine.shouldScanFile('.env', 200, exts, MB) === true, '');
+  expect('scans prod.env', DlpEngine.shouldScanFile('prod.env', 200, exts, MB) === true, '');
+  expect('scans credentials file', DlpEngine.shouldScanFile('credentials', 200, exts, MB) === true, '');
+  expect('scans .npmrc', DlpEngine.shouldScanFile('.npmrc', 50, exts, MB) === true, '');
+  expect('scans id_rsa', DlpEngine.shouldScanFile('id_rsa', 3000, exts, MB) === true, '');
+  expect('scans config.yaml', DlpEngine.shouldScanFile('config.yaml', 500, exts, MB) === true, '');
+  expect('skips image', DlpEngine.shouldScanFile('photo.png', 500, exts, MB) === false, '');
+  expect('skips docx', DlpEngine.shouldScanFile('report.docx', 500, exts, MB) === false, '');
+  expect('skips oversize', DlpEngine.shouldScanFile('big.log', 5 * MB, exts, MB) === false, '');
+  expect('empty list scans any under size', DlpEngine.shouldScanFile('whatever.bin', 10, [], MB) === true, '');
+  expect('empty list still respects size', DlpEngine.shouldScanFile('whatever.bin', 5 * MB, [], MB) === false, '');
+  expect('leading-dot ext normalized', DlpEngine.shouldScanFile('x.json', 10, ['.json'], MB) === true, '');
+  // binary sniff
+  expect('looksBinary on NUL bytes', DlpEngine.looksBinary('abc\x00\x00def') === true, '');
+  expect('text is not binary', DlpEngine.looksBinary('api_key: 12345\nhello world') === false, '');
+}
+
 // ── 16. exfiltration threshold sanity (engine side) ───────────────────────────
 {
   const bulk = Array.from({ length: 12 }, (_, i) => `key${i}: AKIAIOSFODNN7EXAMPL${i % 10}`).join('\n');

@@ -65,6 +65,16 @@ DOM or to storage), and only *counts* are sent to the service worker for the bad
   PII patterns live in hand-written [src/patterns.extra.js](src/patterns.extra.js)
   (ported from the SafeRelay foundation's validated set, since the leakin dataset
   has no PII patterns); everything else is generated from the dataset.
+- **File-upload scanning (warn-only)** — when you attach a file to an AI chatbot
+  (file picker, drag-and-drop, or paste), DLP Guard reads a *copy* and scans it with
+  the same engine before it's sent. If it finds secrets, a warning panel names the
+  file(s) and what was found and suggests removing them — it **never changes or blocks
+  your file**. *Remove from upload* clears the file input for you; *Upload anyway* (or
+  ignoring the panel) is recorded in the stats. Configurable in the options page: on/off,
+  a max file size, and the list of extensions / filenames to scan (defaults cover text
+  and credential files — `.env`, `.pem`, `id_rsa`, `credentials`, `.npmrc`, configs,
+  source, etc.). Binary office/image formats are out of scope (they'd need format
+  parsers); files over the size limit or that sniff as binary are skipped.
 - **Deliberate bypass, always counted** — the redaction toast has a **Paste original**
   button that swaps the real clipboard text back in. In-place replacement is tried
   first; when the editor makes that impossible, a one-shot re-paste window (15 s) is
@@ -109,8 +119,9 @@ DOM or to storage), and only *counts* are sent to the service worker for the bad
     can't hang your pages. All patterns run only in the isolated content-script world.
   - **Protected terms** — the custom-term editor with more room
   - **Sites** — manage the disabled-site list
-  - **Stats & log** — lifetime counters, an activity graph (bypasses/reveals/blocks per
-    day or per month, aggregated locally), and the full audit log, with reset/clear
+  - **Stats & log** — lifetime counters (including risky files uploaded-anyway / removed),
+    an activity graph (bypasses/reveals/blocks/file-uploads per day or per month,
+    aggregated locally), and the full audit log, with reset/clear
   - **Backup** — export the **complete** configuration to a **YAML** file — every
     setting, custom pattern, protected term, and the full built-in regex library with
     your edits applied — and import it back (import re-screens custom and edited

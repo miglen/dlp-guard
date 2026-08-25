@@ -19,6 +19,9 @@ const DEFAULTS = {
   dlp_guardAuthUrl: true,
   dlp_redactInPasswordFields: false,
   dlp_skipCloudEditors: true,
+  dlp_fileScanEnabled: true,
+  dlp_fileMaxSizeKB: 1024,
+  dlp_fileExtensions: (typeof DlpEngine !== 'undefined' && DlpEngine.FILE_EXTENSIONS_DEFAULT) ? [...DlpEngine.FILE_EXTENSIONS_DEFAULT] : [],
   dlp_cats: { ...CAT_DEFAULTS },
   dlp_customTerms: [],
   dlp_userPatterns: [],
@@ -57,6 +60,9 @@ function loadAll() {
     $$('[data-cat]').forEach((el) => { el.checked = Boolean(currentCats[el.dataset.cat]); });
     if (document.activeElement !== $('termsArea')) {
       $('termsArea').value = (items.dlp_customTerms || []).join('\n');
+    }
+    if (document.activeElement !== $('fileExts')) {
+      $('fileExts').value = (items.dlp_fileExtensions || []).join(' ');
     }
     renderSites(items.dlp_disabledSites || []);
     builtinOverrides = Array.isArray(items.dlp_builtinOverrides) ? items.dlp_builtinOverrides : [];
@@ -396,6 +402,23 @@ function renderCustomCats() {
   }
 }
 
+// ── File-scan extensions ──────────────────────────────────────────────────────
+function parseExts(raw) {
+  return [...new Set(raw.split(/[\s,]+/).map((e) => e.trim().toLowerCase().replace(/^\./, '')).filter(Boolean))];
+}
+$('saveExtsBtn').addEventListener('click', () => {
+  const exts = parseExts($('fileExts').value);
+  chrome.storage.local.set({ dlp_fileExtensions: exts }, () => {
+    const s = $('extsStatus'); s.className = 'status ok';
+    s.textContent = `Saved ${exts.length} type${exts.length === 1 ? '' : 's'}.`;
+    setTimeout(() => { s.textContent = ''; }, 1600);
+  });
+});
+$('resetExtsBtn').addEventListener('click', () => {
+  const def = (typeof DlpEngine !== 'undefined' && DlpEngine.FILE_EXTENSIONS_DEFAULT) ? [...DlpEngine.FILE_EXTENSIONS_DEFAULT] : [];
+  chrome.storage.local.set({ dlp_fileExtensions: def }, () => { $('fileExts').value = def.join(' '); banner('Defaults restored.'); });
+});
+
 // ── Protected terms ───────────────────────────────────────────────────────────
 $('saveTermsBtn').addEventListener('click', () => {
   const terms = [...new Set($('termsArea').value.split('\n').map((t) => t.trim()).filter((t) => t.length >= 2))];
@@ -443,10 +466,12 @@ $('addSiteBtn').addEventListener('click', () => {
 let chartGrouping = 'day';
 
 function loadStats() {
-  chrome.storage.local.get({ dlp_bypassCount: 0, dlp_revealCount: 0, dlp_exfilBlocked: 0, dlp_bypassLog: [], dlp_dailyStats: {} }, (s) => {
+  chrome.storage.local.get({ dlp_bypassCount: 0, dlp_revealCount: 0, dlp_exfilBlocked: 0, dlp_fileUploadedAnyway: 0, dlp_fileRemoved: 0, dlp_bypassLog: [], dlp_dailyStats: {} }, (s) => {
     $('stBypass').textContent = String(s.dlp_bypassCount);
     $('stReveal').textContent = String(s.dlp_revealCount);
     $('stExfil').textContent = String(s.dlp_exfilBlocked);
+    $('stFileAnyway').textContent = String(s.dlp_fileUploadedAnyway);
+    $('stFileRemoved').textContent = String(s.dlp_fileRemoved);
     renderLog(Array.isArray(s.dlp_bypassLog) ? s.dlp_bypassLog : []);
     renderChart(s.dlp_dailyStats && typeof s.dlp_dailyStats === 'object' ? s.dlp_dailyStats : {});
   });
@@ -460,26 +485,27 @@ function renderChart(daily) {
   if (days.length === 0) { host.innerHTML = ''; $('chartEmpty').style.display = 'block'; return; }
   $('chartEmpty').style.display = 'none';
 
-  const buckets = new Map(); // key → {paste,reveal,exfil}
+  const KINDS = ['paste', 'reveal', 'exfil', 'file'];
+  const buckets = new Map(); // key → {paste,reveal,exfil,file}
   for (const d of days) {
     const key = chartGrouping === 'month' ? d.slice(0, 7) : d;
-    const b = buckets.get(key) || { paste: 0, reveal: 0, exfil: 0 };
+    const b = buckets.get(key) || { paste: 0, reveal: 0, exfil: 0, file: 0 };
     const v = daily[d] || {};
-    b.paste += v.paste || 0; b.reveal += v.reveal || 0; b.exfil += v.exfil || 0;
+    for (const k of KINDS) b[k] += v[k] || 0;
     buckets.set(key, b);
   }
   // keep the most recent N buckets so the chart stays readable
   const N = chartGrouping === 'month' ? 18 : 30;
   const keys = [...buckets.keys()].sort().slice(-N);
   const data = keys.map((k) => ({ key: k, ...buckets.get(k) }));
-  const max = Math.max(1, ...data.map((d) => Math.max(d.paste, d.reveal, d.exfil)));
+  const max = Math.max(1, ...data.map((d) => Math.max(...KINDS.map((k) => d[k]))));
 
-  const W = Math.max(560, data.length * 46);
+  const W = Math.max(560, data.length * 52);
   const H = 240, padL = 34, padB = 46, padT = 10;
   const plotH = H - padB - padT;
   const groupW = (W - padL - 8) / data.length;
-  const barW = Math.max(3, (groupW - 8) / 3);
-  const COLORS = { paste: '#e02424', reveal: '#c27803', exfil: '#1f6feb' };
+  const barW = Math.max(2.5, (groupW - 8) / KINDS.length);
+  const COLORS = { paste: '#e02424', reveal: '#c27803', exfil: '#1f6feb', file: '#059669' };
   const y = (v) => padT + plotH - (v / max) * plotH;
 
   const parts = [];
@@ -493,7 +519,7 @@ function renderChart(daily) {
   }
   data.forEach((d, i) => {
     const gx = padL + i * groupW + 4;
-    ['paste', 'reveal', 'exfil'].forEach((kind, j) => {
+    KINDS.forEach((kind, j) => {
       const v = d[kind];
       if (v <= 0) return;
       const bx = gx + j * barW;
@@ -530,7 +556,7 @@ function renderLog(log) {
 
 $('clearStatsBtn').addEventListener('click', () => {
   // clear the graph history too, so it stays consistent with the counters
-  chrome.storage.local.set({ dlp_bypassCount: 0, dlp_revealCount: 0, dlp_exfilBlocked: 0, dlp_dailyStats: {} }, () => { loadStats(); banner('Counters reset.'); });
+  chrome.storage.local.set({ dlp_bypassCount: 0, dlp_revealCount: 0, dlp_exfilBlocked: 0, dlp_fileWithSecrets: 0, dlp_fileUploadedAnyway: 0, dlp_fileRemoved: 0, dlp_dailyStats: {} }, () => { loadStats(); banner('Counters reset.'); });
 });
 $('clearLogBtn').addEventListener('click', () => {
   chrome.storage.local.set({ dlp_bypassLog: [] }, () => { loadStats(); banner('Log cleared.'); });

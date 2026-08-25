@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>DLP Guard — File upload test</title>
+<style>
+  body { font: 15px/1.6 system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 20px; }
+  .drop { border: 2px dashed #9ca3af; border-radius: 10px; padding: 30px; text-align: center; color: #6b7280; margin: 16px 0; }
+  .note { color: #6b7280; font-size: 13px; }
+  button { padding: 8px 12px; }
+  #log { font-family: monospace; font-size: 12px; white-space: pre-wrap; background: #f4f4f5; padding: 10px; border-radius: 8px; margin-top: 16px; }
+</style>
+</head>
+<body>
+  <h1>🛡️ File-upload scan test</h1>
+  <p class="note">This page simulates an AI chatbot's attach + drag-drop. Attach or drop a
+  file that contains secrets (e.g. a <code>.env</code> with <code>AWS_ACCESS_KEY_ID="AKIAIOSFODNN7EXAMPLE"</code>)
+  — DLP Guard should pop a warning listing the file and what it found. It does not change or block the file.</p>
+
+  <h2>1. File picker</h2>
+  <input type="file" id="picker" multiple>
+
+  <h2>2. Drag &amp; drop</h2>
+  <div class="drop" id="drop">Drop files here</div>
+
+  <h2>3. Make a test file</h2>
+  <p class="note">Click to download a sample <code>secrets.env</code> you can then re-upload above:</p>
+  <button id="makeFile">Download secrets.env</button>
+
+  <div id="log">page log:</div>
+
+  <script>
+    const log = (m) => { document.getElementById('log').textContent += '\n' + m; };
+    document.getElementById('picker').addEventListener('change', (e) => {
+      log('page saw change: ' + [...e.target.files].map(f => f.name).join(', '));
+    });
+    const dz = document.getElementById('drop');
+    dz.addEventListener('dragover', (e) => { e.preventDefault(); dz.style.borderColor = '#e02424'; });
+    dz.addEventListener('dragleave', () => { dz.style.borderColor = '#9ca3af'; });
+    dz.addEventListener('drop', (e) => {
+      e.preventDefault(); dz.style.borderColor = '#9ca3af';
+      log('page saw drop: ' + [...e.dataTransfer.files].map(f => f.name).join(', '));
+    });
+    document.getElementById('makeFile').addEventListener('click', () => {
+      const body = [
+        '# sample credentials',
+        'AWS_ACCESS_KEY_ID="AKIAIOSFODNN7EXAMPLE"',
+        'AWS_SECRET_ACCESS_KEY="wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY1"',
+        'export OPENAI_API_KEY=sk-proj-abc123DEF456ghi789JKL012mno',
+        'db_password = Sup3rS3cretV4lue99',
+      ].join('\n');
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([body], { type: 'text/plain' }));
+      a.download = 'secrets.env'; a.click();
+    });
+  </script>
+</body>
+</html>

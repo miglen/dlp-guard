@@ -108,6 +108,18 @@
       <div class="row"><label>Redact secrets pasted into password fields<span class="desc">Off (default) lets you paste passwords and API keys into password inputs. On also masks them there.</span></label><input type="checkbox" data-setting="dlp_redactInPasswordFields"></div>
       <div class="row"><label>Skip cloud document editors<span class="desc">Suspend inside Google Docs/Sheets/Slides, Microsoft 365, SharePoint/OneDrive, Notion, Quip, Coda, Dropbox Paper, Zoho, Confluence — they manage their own editing and masking can corrupt the document. Turn off to run there anyway.</span></label><input type="checkbox" data-setting="dlp_skipCloudEditors"></div>
     </div>
+
+    <div class="card">
+      <h2>File-upload scanning</h2>
+      <p class="hint">When you attach a file to an AI chatbot, DLP Guard reads a copy and warns you if it contains secrets — before you send it. It never changes or blocks your file; if you upload anyway, that's recorded in the stats.</p>
+      <div class="row"><label>Scan files before upload<span class="desc">Checks file attachments (file picker, drag-and-drop, paste)</span></label><input type="checkbox" data-setting="dlp_fileScanEnabled"></div>
+      <div class="row"><label>Maximum file size to scan (KB)<span class="desc">Larger files are skipped unread</span></label><input type="number" min="1" max="102400" data-setting="dlp_fileMaxSizeKB" style="width:90px;"></div>
+      <div style="margin-top:8px;">
+        <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px;">File extensions / names to scan (space or newline separated; empty = every text file under the size limit)</label>
+        <textarea id="fileExts" rows="4" class="mono" style="width:100%;"></textarea>
+        <div class="toolbar"><button class="btn small" id="saveExtsBtn">Save extensions</button><button class="btn secondary small" id="resetExtsBtn">Restore defaults</button><span class="status" id="extsStatus"></span></div>
+      </div>
+    </div>
   </section>
 
   <!-- CATEGORIES -->
@@ -197,6 +209,8 @@
         <div><div class="statbig" id="stBypass">0</div><div class="lbl">Originals pasted (bypass)</div></div>
         <div><div class="statbig" id="stReveal">0</div><div class="lbl">Masks revealed</div></div>
         <div><div class="statbig" id="stExfil">0</div><div class="lbl">Bulk copies blocked</div></div>
+        <div><div class="statbig" id="stFileAnyway">0</div><div class="lbl">Risky files uploaded anyway</div></div>
+        <div><div class="statbig" id="stFileRemoved">0</div><div class="lbl">Risky files removed</div></div>
       </div>
       <div class="toolbar"><button class="btn secondary small" id="clearStatsBtn">Reset counters</button></div>
     </div>
@@ -213,6 +227,7 @@
         <span><span style="display:inline-block;width:10px;height:10px;background:#e02424;border-radius:2px;"></span> bypass</span>
         <span><span style="display:inline-block;width:10px;height:10px;background:#c27803;border-radius:2px;"></span> reveal</span>
         <span><span style="display:inline-block;width:10px;height:10px;background:#1f6feb;border-radius:2px;"></span> blocked</span>
+        <span><span style="display:inline-block;width:10px;height:10px;background:#059669;border-radius:2px;"></span> file uploaded</span>
       </div>
       <div id="chart" style="overflow-x:auto;"></div>
       <div class="empty" id="chartEmpty">No activity recorded yet.</div>

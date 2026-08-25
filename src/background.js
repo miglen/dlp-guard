@@ -97,8 +97,43 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     recordBypass('exfil', message.host, message.secrets);
     return false;
   }
+  if (message?.type === 'DLP_FILE_STAT' && sender.tab?.id != null) {
+    recordFileStat(message.kind, message.host, message.secrets);
+    return false;
+  }
   return false;
 });
+
+// File-upload scan stats: how many risky files were detected, removed, or
+// uploaded anyway. 'anyway' also feeds the activity graph's file series.
+function recordFileStat(kind, host, secrets) {
+  bypassQueue = bypassQueue.then(async () => {
+    const items = await chrome.storage.local.get({
+      dlp_fileWithSecrets: 0, dlp_fileRemoved: 0, dlp_fileUploadedAnyway: 0,
+      dlp_bypassLog: [], dlp_dailyStats: {},
+    });
+    const update = {};
+    if (kind === 'detected') update.dlp_fileWithSecrets = items.dlp_fileWithSecrets + 1;
+    else if (kind === 'removed') update.dlp_fileRemoved = items.dlp_fileRemoved + 1;
+    else if (kind === 'anyway') update.dlp_fileUploadedAnyway = items.dlp_fileUploadedAnyway + 1;
+
+    const now = new Date();
+    const log = Array.isArray(items.dlp_bypassLog) ? items.dlp_bypassLog : [];
+    log.push({ t: now.getTime(), kind: 'file-' + kind, host: String(host || ''), secrets: secrets | 0 });
+    if (log.length > MAX_BYPASS_LOG) log.splice(0, log.length - MAX_BYPASS_LOG);
+    update.dlp_bypassLog = log;
+
+    if (kind === 'anyway') {
+      const daily = (items.dlp_dailyStats && typeof items.dlp_dailyStats === 'object') ? items.dlp_dailyStats : {};
+      const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const bucket = daily[day] || { paste: 0, reveal: 0, exfil: 0, file: 0 };
+      bucket.file = (bucket.file || 0) + 1;
+      daily[day] = bucket;
+      update.dlp_dailyStats = daily;
+    }
+    await chrome.storage.local.set(update);
+  }).catch(() => {});
+}
 
 // Reset the count when a tab navigates or closes.
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
@@ -129,6 +164,8 @@ chrome.runtime.onInstalled.addListener(() => {
       dlp_guardAuthUrl: true,
       dlp_redactInPasswordFields: false,
       dlp_skipCloudEditors: true,
+      dlp_fileScanEnabled: true,
+      dlp_fileMaxSizeKB: 1024,
       dlp_disabledSites: [],
     };
     const missing = {};

@@ -28,6 +28,9 @@
     dlp_guardAuthUrl: true,       // suspend on login/registration URLs
     dlp_redactInPasswordFields: false, // OFF = let secrets be pasted into pw fields
     dlp_skipCloudEditors: true,   // suspend inside Docs/365/Notion/… editors
+    dlp_fileScanEnabled: true,    // scan files before chatbot upload
+    dlp_fileExtensions: DlpEngine.FILE_EXTENSIONS_DEFAULT,
+    dlp_fileMaxSizeKB: 1024,      // skip files larger than this
     dlp_disabledSites: [],
   });
 
@@ -47,6 +50,9 @@
     guardAuthUrl: true,
     redactInPasswordFields: false,
     skipCloudEditors: true,
+    fileScanEnabled: true,
+    fileExtensions: DlpEngine.FILE_EXTENSIONS_DEFAULT,
+    fileMaxBytes: 1024 * 1024,
     disabledSites: [],
     suspendReason: null, // non-null → login/registration page, do nothing
     maskCount: 0,        // secrets currently hidden on this page
@@ -79,6 +85,9 @@
     STATE.guardAuthUrl = items.dlp_guardAuthUrl !== false;
     STATE.redactInPasswordFields = items.dlp_redactInPasswordFields === true;
     STATE.skipCloudEditors = items.dlp_skipCloudEditors !== false;
+    STATE.fileScanEnabled = items.dlp_fileScanEnabled !== false;
+    STATE.fileExtensions = Array.isArray(items.dlp_fileExtensions) ? items.dlp_fileExtensions : DlpEngine.FILE_EXTENSIONS_DEFAULT;
+    STATE.fileMaxBytes = (Number(items.dlp_fileMaxSizeKB) > 0 ? Number(items.dlp_fileMaxSizeKB) : 1024) * 1024;
     STATE.disabledSites = Array.isArray(items.dlp_disabledSites) ? items.dlp_disabledSites : [];
     DlpEngine.compile(STATE.cats, STATE.customTerms, STATE.userPatterns, STATE.builtinOverrides);
     scanGeneration++;
@@ -649,6 +658,65 @@
     } catch (_e) { /* extension reloaded */ }
   }
 
+  // ── File-upload scanning (warn-only, never modifies the file) ───────────────
+  // When the user attaches a file to a chatbot, read a COPY and scan it for
+  // secrets. We never change or block the file — we warn and let the user
+  // decide. If they keep it, that's recorded in the stats.
+  const scannedFiles = new WeakSet(); // avoid re-scanning the same File object
+
+  function fileScanActive() {
+    return STATE.ready && STATE.enabled && STATE.fileScanEnabled &&
+      !siteDisabled() && !STATE.suspendReason;
+  }
+
+  async function handleFiles(fileList, sourceInput) {
+    if (!fileScanActive() || !fileList || fileList.length === 0) return;
+    const risky = [];
+    for (const file of fileList) {
+      if (!file || scannedFiles.has(file)) continue;
+      scannedFiles.add(file);
+      if (!DlpEngine.shouldScanFile(file.name, file.size, STATE.fileExtensions, STATE.fileMaxBytes)) continue;
+      let text;
+      try { text = await file.text(); } catch (_e) { continue; }
+      if (!text || DlpEngine.looksBinary(text)) continue;
+      const ranges = DlpEngine.findRanges(text, 2000);
+      if (ranges.length === 0) continue;
+      const labels = [...new Set(ranges.map((r) => r.label))].slice(0, 6);
+      risky.push({ name: file.name, count: ranges.length, labels });
+    }
+    if (risky.length === 0) return;
+    const totalSecrets = risky.reduce((n, f) => n + f.count, 0);
+    reportFileStat('detected', totalSecrets);
+    showFileWarning(risky, sourceInput);
+  }
+
+  function reportFileStat(kind, secrets) {
+    try {
+      chrome.runtime.sendMessage({
+        type: 'DLP_FILE_STAT', kind, secrets: secrets | 0, host: location.hostname,
+      });
+    } catch (_e) { /* extension reloaded */ }
+  }
+
+  // file input: fires after the user picks files
+  document.addEventListener('change', (event) => {
+    const t = event.target;
+    if (t instanceof HTMLInputElement && t.type === 'file') handleFiles(t.files, t);
+  }, true);
+
+  // drag-and-drop onto the page
+  document.addEventListener('drop', (event) => {
+    const files = event.dataTransfer && event.dataTransfer.files;
+    if (files && files.length) handleFiles(files, null);
+  }, true);
+
+  // pasted files (e.g. a copied file from the OS file manager)
+  window.addEventListener('paste', (event) => {
+    if (!event.isTrusted) return;
+    const files = event.clipboardData && event.clipboardData.files;
+    if (files && files.length) handleFiles(files, null);
+  }, true);
+
   function insertText(editable, text) {
     // execCommand routes through the editing pipeline, so React/ProseMirror
     // editors (ChatGPT, Claude, DeepSeek, Kimi, Lovable) treat it as typing.
@@ -777,5 +845,108 @@
       }, 350);
     }, action ? 8000 : 3500);
     activeToast = { host, timer, hadAction: Boolean(action) };
+  }
+
+  // ── File-upload warning panel ────────────────────────────────────────────────
+  // Rendered in a closed shadow root like the toast. Two choices, and exactly
+  // one outcome is recorded: 'removed' (user cleared it) or 'anyway' (kept it,
+  // or ignored the panel until it timed out).
+  let activeFilePanel = null;
+  function showFileWarning(risky, sourceInput) {
+    if (activeFilePanel) { clearTimeout(activeFilePanel.timer); activeFilePanel.host.remove(); activeFilePanel = null; }
+    const totalSecrets = risky.reduce((n, f) => n + f.count, 0);
+    let resolved = false;
+
+    const host = document.createElement('div');
+    host.style.cssText = 'position:fixed;top:16px;right:16px;z-index:2147483647;';
+    const root = host.attachShadow({ mode: 'closed' });
+    const box = document.createElement('div');
+    box.setAttribute('role', 'alertdialog');
+    box.style.cssText = [
+      'background:#fff', 'border:2px solid #e02424', 'color:#1f2937',
+      'padding:14px 16px', 'border-radius:10px', 'width:360px', 'max-width:92vw',
+      'font:400 13px system-ui,sans-serif', 'box-shadow:0 8px 28px rgba(0,0,0,.25)',
+    ].join(';');
+
+    const title = document.createElement('div');
+    title.style.cssText = 'font-weight:700;color:#9b1c1c;margin-bottom:6px;font-size:14px;';
+    title.textContent = `🛡️ Don't upload — ${totalSecrets} secret${totalSecrets > 1 ? 's' : ''} found`;
+    box.appendChild(title);
+
+    const intro = document.createElement('div');
+    intro.style.cssText = 'color:#374151;margin-bottom:8px;';
+    intro.textContent = `${risky.length === 1 ? 'This file looks like it contains' : 'These files look like they contain'} secrets. Uploading to this AI tool would expose them. Please remove ${risky.length === 1 ? 'it' : 'them'} first — DLP Guard will not change your file.`;
+    box.appendChild(intro);
+
+    const list = document.createElement('ul');
+    list.style.cssText = 'margin:0 0 10px;padding-left:18px;color:#4b5563;max-height:120px;overflow:auto;';
+    for (const f of risky.slice(0, 8)) {
+      const li = document.createElement('li');
+      li.style.cssText = 'margin:2px 0;';
+      const nm = document.createElement('span');
+      nm.style.cssText = 'font-family:ui-monospace,Menlo,monospace;color:#111827;';
+      nm.textContent = f.name;
+      li.appendChild(nm);
+      li.appendChild(document.createTextNode(` — ${f.count} (${f.labels.join(', ')}${f.count > f.labels.length ? '…' : ''})`));
+      list.appendChild(li);
+    }
+    box.appendChild(list);
+
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;';
+    const mk = (label, primary) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.style.cssText = [
+        primary ? 'background:#e02424' : 'background:#f3f4f6',
+        primary ? 'color:#fff' : 'color:#374151',
+        primary ? 'border:none' : 'border:1px solid #d1d5db',
+        'border-radius:6px', 'padding:7px 12px', 'font:600 12px system-ui,sans-serif',
+        'cursor:pointer', 'white-space:nowrap',
+      ].join(';');
+      b.addEventListener('mousedown', (e) => e.preventDefault());
+      return b;
+    };
+
+    const canClear = sourceInput instanceof HTMLInputElement;
+    const removeBtn = mk(canClear ? 'Remove from upload' : 'I removed it', true);
+    const keepBtn = mk('Upload anyway', false);
+
+    function finish(kind) {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timer);
+      host.remove();
+      if (activeFilePanel && activeFilePanel.host === host) activeFilePanel = null;
+      reportFileStat(kind, totalSecrets);
+    }
+    function geomSane(btn) {
+      const r = btn.getBoundingClientRect();
+      return r.width > 0 && r.width <= 260 && r.height <= 60 && r.top <= 160 && r.right >= window.innerWidth - 480;
+    }
+    removeBtn.addEventListener('click', (e) => {
+      if (!e.isTrusted || !geomSane(removeBtn)) return;
+      if (canClear) {
+        try {
+          sourceInput.value = '';
+          sourceInput.dispatchEvent(new Event('input', { bubbles: true }));
+          sourceInput.dispatchEvent(new Event('change', { bubbles: true }));
+        } catch (_e) { /* best effort */ }
+      }
+      finish('removed');
+      showToast(canClear ? 'file removed from the upload' : 'thanks — remove the attachment in the chat to be safe');
+    });
+    keepBtn.addEventListener('click', (e) => {
+      if (!e.isTrusted || !geomSane(keepBtn)) return;
+      finish('anyway');
+    });
+    row.append(removeBtn, keepBtn);
+    box.appendChild(row);
+    root.appendChild(box);
+    (document.body || document.documentElement).appendChild(host);
+
+    // If ignored, treat it as "kept" — the file is still attached.
+    const timer = setTimeout(() => finish('anyway'), 20000);
+    activeFilePanel = { host, timer };
   }
 })();
