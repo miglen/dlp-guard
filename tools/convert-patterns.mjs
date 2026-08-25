@@ -174,11 +174,17 @@ const dropped = [];
 // cheap indexOf gate before running the full regex. null → no reliable literal.
 function literalGate(base) {
   if (base.includes('|')) return null; // alternation → no single required word
+  // character classes, brace counts, and escapes are not required literals
+  const stripped = base
+    .replace(/\[(?:[^\]\\]|\\.)*\]/g, ' ')
+    .replace(/\{[0-9,]*\}/g, ' ')
+    .replace(/\\./g, ' ');
   const words = [];
-  for (const m of base.matchAll(/[a-z0-9]{3,}/gi)) {
+  for (const m of stripped.matchAll(/[a-z0-9]{3,}/gi)) {
     let w = m[0];
-    // a trailing char quantified with ? is optional — drop it
-    if (base[m.index + w.length] === '?') w = w.slice(0, -1);
+    // a trailing char quantified with ? or * is optional — drop it
+    const next = stripped[m.index + w.length];
+    if (next === '?' || next === '*') w = w.slice(0, -1);
     if (w.length >= 3) words.push(w.toLowerCase());
   }
   if (words.length === 0) return null;
@@ -215,6 +221,10 @@ for (const e of entries) {
   src = src
     .replace(/^\[([^\]]+)\]\+/, '[$1]{1,100}')
     .replace(/^\[([^\]]+)\]\*/, '[$1]{0,100}');
+  // extract the literal gate BEFORE the privatekey/boundary rewrites below —
+  // they add alternations that would defeat extraction, but the required
+  // literals are unchanged by them
+  const gate = literalGate(src);
   if (category === 'privatekey') {
     // The dataset patterns match only the "-----BEGIN …-----" header line.
     // Extend them to swallow the whole block: body = anything up to the next
@@ -225,7 +235,9 @@ for (const e of entries) {
     src = `${src}(?:(?!-----(?:BEGIN|END))[\\s\\S])*(?:-----END[A-Za-z ]*-----)?`;
   }
   const bounded = addBoundaries(src);
-  pushPattern(e.name, category, bounded, flags, 0);
+  // literal gate for every category — the engine skips a pattern with a
+  // cheap indexOf before ever running its regex
+  pushPattern(e.name, category, bounded, flags, 0, undefined, gate);
 }
 
 function countGroups(src) {

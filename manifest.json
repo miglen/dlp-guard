@@ -21,6 +21,7 @@
       "match_about_blank": true,
       "js": [
         "src/patterns.generated.js",
+        "src/patterns.extra.js",
         "src/engine.js",
         "src/pageguard.js",
         "src/content.js"

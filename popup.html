@@ -84,8 +84,12 @@
       <input type="checkbox" id="redactPaste">
     </div>
     <div class="row">
-      <label for="revealOnClick">Click a chip to reveal</label>
+      <label for="revealOnClick">Click a mask to reveal</label>
       <input type="checkbox" id="revealOnClick">
+    </div>
+    <div class="row">
+      <label for="exfilShield">Exfiltration shield <span class="hint">(block bulk copies)</span></label>
+      <input type="checkbox" id="exfilShield">
     </div>
   </div>
 
@@ -104,6 +108,10 @@
       <input type="checkbox" id="catPrivatekey">
     </div>
     <div class="row">
+      <label for="catPii">PII: IPs, emails, SSN, cards <span class="hint">(noisy)</span></label>
+      <input type="checkbox" id="catPii">
+    </div>
+    <div class="row">
       <label for="catInfra">Cloud endpoints <span class="hint">(noisy)</span></label>
       <input type="checkbox" id="catInfra">
     </div>
@@ -114,14 +122,25 @@
   </div>
 
   <div class="section">
+    <h2>Custom protected terms</h2>
+    <textarea id="customTerms" rows="3" placeholder="One term per line — server names, client names, codenames…"
+      style="width:100%; box-sizing:border-box; font:12px system-ui,sans-serif; resize:vertical;"></textarea>
+    <button id="saveTerms" style="margin-top:6px; width:100%; padding:6px; background:#e02424; color:#fff; border:none; border-radius:6px; font:600 12px system-ui,sans-serif; cursor:pointer;">Save terms</button>
+  </div>
+
+  <div class="section">
     <h2>Bypass stats</h2>
     <div class="row">
       <label>Originals pasted (bypass)</label>
       <span id="bypassCount">0</span>
     </div>
     <div class="row">
-      <label>Chips revealed</label>
+      <label>Masks revealed</label>
       <span id="revealCount">0</span>
+    </div>
+    <div class="row">
+      <label>Bulk copies blocked</label>
+      <span id="exfilCount">0</span>
     </div>
   </div>
 

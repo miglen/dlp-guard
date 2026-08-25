@@ -48,6 +48,18 @@ AiEAioOWu1s5nbB6ioOXdhbW4Ov5xfI62TYJNxdz656/njsCIQCCxRfwRVfDcC0h
 WRuPspPXIAHPKrjEHkUsgDZHW/V0fJWbIjJarw==
 -----END RSA PRIVATE KEY-----</pre>
 
+  <h2>3b. PII (enable the “PII” category in the popup first)</h2>
+  <p>Internal IP 10.50.22.18, loopback 127.0.0.1 (stays visible), email jane.doe@example.com,
+  SSN 234-56-7890, card 4111 1111 1111 1111 (Luhn-valid), invalid digits 1234 5678 1234 5678
+  (stays visible), MAC 00:1B:44:11:3A:B7.</p>
+
+  <h2>3c. Custom terms (add “Acme Health Partners” in the popup)</h2>
+  <p>Customer: Acme Health Partners signed yesterday. Acmeology stays visible (word boundary).</p>
+
+  <h2>3d. Exfiltration shield</h2>
+  <p class="note">Select ALL of section 2 and section 6 together (10+ secrets) and copy —
+  the clipboard should contain a block notice instead. Copying one line stays allowed.</p>
+
   <h2>4. Should NOT be masked (false-positive check)</h2>
   <p>The meeting is at 14:30. Config: temperature: 0.7, max_tokens: 4096.
   Placeholders: api_key: YOUR_API_KEY, secret: &lt;your-key-here&gt;.

@@ -57,8 +57,14 @@ DOM or to storage), and only *counts* are sent to the service worker for the bad
   | API keys & tokens | 61 | on | Concrete formats: `AKIA…`, `xox…`, `sk_live_…`, JWT, … |
   | key=value assignments | 691 | on | `api_key: <value>` — only the value is hidden |
   | Private key blocks | 5 | on | whole `-----BEGIN…-----END-----` armor blocks |
+  | Custom protected terms | user | on | your server/client/project names (popup textarea) |
+  | PII | 8 | off | IPs (validated octets), emails, US SSN, cards (Luhn), MAC, IBAN, BTC/ETH |
   | Cloud endpoints | 12 | off | `*.cloudfront.net`, `*.s3.amazonaws.com`, … (noisy) |
   | Generic URLs/UUIDs | 4 | off | catch-alls (very noisy) |
+
+  PII patterns live in hand-written [src/patterns.extra.js](src/patterns.extra.js)
+  (ported from the SafeRelay foundation's validated set, since the leakin dataset
+  has no PII patterns); everything else is generated from the dataset.
 - **Deliberate bypass, always counted** — the redaction toast has a **Paste original**
   button that swaps the real clipboard text back in. In-place replacement is tried
   first; when the editor makes that impossible, a one-shot re-paste window (15 s) is
@@ -69,6 +75,16 @@ DOM or to storage), and only *counts* are sent to the service worker for the bad
   page is also a bypass. Both kinds are recorded: persistent counters plus a rolling 200-entry log
   (`timestamp · hostname · kind · secret count` — never the values) in
   `chrome.storage.local`; totals show in the popup under **Bypass stats**.
+- **Custom protected terms** — add your own server names, client names, or project
+  codenames in the popup (one per line); occurrences are masked on pages and in pastes
+  with word-boundary matching, case-insensitive.
+- **Exfiltration shield** — copying a selection that contains 10+ detected secrets is
+  blocked: the clipboard receives a notice instead and the block is counted
+  (popup → Bypass stats → "Bulk copies blocked"). Toggleable; normal copies with a
+  secret or two are never touched.
+- **Google Workspace compatibility** — Docs/Sheets/Slides do their own paste and DOM
+  handling, so DLP Guard suspends itself there (same behavior as the foundation
+  extension) rather than corrupting the editor.
 - **Per-site disable** and a global kill switch in the popup; badge shows the number of
   secrets hidden/redacted on the current tab.
 

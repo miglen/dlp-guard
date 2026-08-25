@@ -7,13 +7,16 @@ const DEFAULTS = {
   dlp_maskOnPage: true,
   dlp_redactPaste: true,
   dlp_revealOnClick: true,
-  dlp_cats: { token: true, assignment: true, privatekey: true, infra: false, generic: false },
+  dlp_exfilShield: true,
+  dlp_cats: { token: true, assignment: true, privatekey: true, custom: true, pii: false, infra: false, generic: false },
+  dlp_customTerms: [],
   dlp_disabledSites: [],
 };
 
 const $ = (id) => document.getElementById(id);
 let currentHostname = null;
 let disabledSites = [];
+let termsDirty = false;
 
 function setStatus(cls, text) {
   const el = $('status');
@@ -27,20 +30,28 @@ function loadSettings() {
     $('maskOnPage').checked = items.dlp_maskOnPage !== false;
     $('redactPaste').checked = items.dlp_redactPaste !== false;
     $('revealOnClick').checked = items.dlp_revealOnClick !== false;
+    $('exfilShield').checked = items.dlp_exfilShield !== false;
     const cats = { ...DEFAULTS.dlp_cats, ...(items.dlp_cats || {}) };
     $('catToken').checked = cats.token;
     $('catAssignment').checked = cats.assignment;
     $('catPrivatekey').checked = cats.privatekey;
+    $('catPii').checked = cats.pii;
     $('catInfra').checked = cats.infra;
     $('catGeneric').checked = cats.generic;
+    // don't clobber the textarea while it has focus OR unsaved edits
+    if (document.activeElement !== $('customTerms') && !termsDirty) {
+      const terms = Array.isArray(items.dlp_customTerms) ? items.dlp_customTerms : [];
+      $('customTerms').value = terms.join('\n');
+    }
     disabledSites = Array.isArray(items.dlp_disabledSites) ? items.dlp_disabledSites : [];
     if (currentHostname) {
       $('site').checked = !disabledSites.includes(currentHostname);
     }
   });
-  chrome.storage.local.get({ dlp_bypassCount: 0, dlp_revealCount: 0 }, (s) => {
+  chrome.storage.local.get({ dlp_bypassCount: 0, dlp_revealCount: 0, dlp_exfilBlocked: 0 }, (s) => {
     $('bypassCount').textContent = String(s.dlp_bypassCount);
     $('revealCount').textContent = String(s.dlp_revealCount);
+    $('exfilCount').textContent = String(s.dlp_exfilBlocked);
   });
 }
 
@@ -68,7 +79,9 @@ function queryTab() {
       $('siteLabel').textContent = `Enable on ${resp.hostname || 'this site'}`;
       $('site').checked = !resp.siteDisabled;
       if (resp.suspended) {
-        setStatus('warn', `Suspended — ${resp.reason}. DLP Guard never runs on login or registration pages.`);
+        const isAuth = /password|login|registration/i.test(resp.reason || '');
+        setStatus('warn', `Suspended — ${resp.reason}.` +
+          (isAuth ? ' DLP Guard never runs on login or registration pages.' : ''));
       } else if (resp.siteDisabled) {
         setStatus('off', 'Disabled on this site');
       } else {
@@ -89,20 +102,36 @@ $('redactPaste').addEventListener('change', (e) =>
   chrome.storage.local.set({ dlp_redactPaste: e.target.checked }));
 $('revealOnClick').addEventListener('change', (e) =>
   chrome.storage.local.set({ dlp_revealOnClick: e.target.checked }));
+$('exfilShield').addEventListener('change', (e) =>
+  chrome.storage.local.set({ dlp_exfilShield: e.target.checked }));
 
-for (const cat of ['token', 'assignment', 'privatekey', 'infra', 'generic']) {
+for (const cat of ['token', 'assignment', 'privatekey', 'pii', 'infra', 'generic']) {
   const id = 'cat' + cat[0].toUpperCase() + cat.slice(1);
   $(id).addEventListener('change', () => {
     const cats = {
       token: $('catToken').checked,
       assignment: $('catAssignment').checked,
       privatekey: $('catPrivatekey').checked,
+      custom: true,
+      pii: $('catPii').checked,
       infra: $('catInfra').checked,
       generic: $('catGeneric').checked,
     };
     chrome.storage.local.set({ dlp_cats: cats });
   });
 }
+
+$('customTerms').addEventListener('input', () => { termsDirty = true; });
+$('saveTerms').addEventListener('click', () => {
+  const terms = [...new Set(
+    $('customTerms').value.split('\n').map((t) => t.trim()).filter((t) => t.length >= 2)
+  )];
+  chrome.storage.local.set({ dlp_customTerms: terms }, () => {
+    termsDirty = false;
+    $('saveTerms').textContent = `Saved ${terms.length} term${terms.length === 1 ? '' : 's'}`;
+    setTimeout(() => { $('saveTerms').textContent = 'Save terms'; }, 1500);
+  });
+});
 
 $('site').addEventListener('change', (e) => {
   if (!currentHostname) return;

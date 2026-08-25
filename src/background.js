@@ -40,10 +40,12 @@ function recordBypass(kind, host, secrets) {
     const items = await chrome.storage.local.get({
       dlp_bypassCount: 0,
       dlp_revealCount: 0,
+      dlp_exfilBlocked: 0,
       dlp_bypassLog: [],
     });
     const update = {};
     if (kind === 'paste') update.dlp_bypassCount = items.dlp_bypassCount + 1;
+    else if (kind === 'exfil') update.dlp_exfilBlocked = items.dlp_exfilBlocked + 1;
     else update.dlp_revealCount = items.dlp_revealCount + 1;
     const log = Array.isArray(items.dlp_bypassLog) ? items.dlp_bypassLog : [];
     log.push({ t: Date.now(), kind, host: String(host || ''), secrets: secrets | 0 });
@@ -72,6 +74,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     recordBypass(message.kind === 'paste' ? 'paste' : 'reveal', message.host, message.secrets);
     return false;
   }
+  if (message?.type === 'DLP_EXFIL_BLOCK' && sender.tab?.id != null) {
+    recordBypass('exfil', message.host, message.secrets);
+    return false;
+  }
   return false;
 });
 
@@ -94,7 +100,9 @@ chrome.runtime.onInstalled.addListener(() => {
       dlp_maskOnPage: true,
       dlp_redactPaste: true,
       dlp_revealOnClick: true,
-      dlp_cats: { token: true, assignment: true, privatekey: true, infra: false, generic: false },
+      dlp_exfilShield: true,
+      dlp_cats: { token: true, assignment: true, privatekey: true, custom: true, pii: false, infra: false, generic: false },
+      dlp_customTerms: [],
       dlp_disabledSites: [],
     };
     const missing = {};

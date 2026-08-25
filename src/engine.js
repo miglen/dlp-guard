@@ -3,11 +3,14 @@
 'use strict';
 
 const DlpEngine = (() => {
-  // category → settings key; infra & generic ship default-off (too noisy).
+  // category → settings key; infra, generic & pii ship default-off (noisy).
+  // custom = user-defined protected terms, always honored when terms exist.
   const CATEGORY_DEFAULTS = Object.freeze({
     token: true,
     assignment: true,
     privatekey: true,
+    custom: true,
+    pii: false,
     infra: false,
     generic: false,
   });
@@ -21,12 +24,18 @@ const DlpEngine = (() => {
     'string', 'value', 'token_here', 'key_here', 'process.env',
   ]);
 
-  let compiled = null; // [{re, label, category, valueGroup}]
+  let compiled = null; // [{re, label, category, valueGroup, lit, validate, mask}]
   let assignmentPrefilter = null;
+  let minLen = 6; // shortest text worth scanning; lowered when short custom terms exist
 
-  function compile(enabledCategories) {
+  function escapeRegex(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  function compile(enabledCategories, customTerms = []) {
     compiled = [];
-    for (const p of DLP_PATTERNS) {
+    const extra = typeof DLP_EXTRA_PATTERNS !== 'undefined' ? DLP_EXTRA_PATTERNS : [];
+    for (const p of [...DLP_PATTERNS, ...extra]) {
       if (!enabledCategories[p.category]) continue;
       try {
         compiled.push({
@@ -35,9 +44,33 @@ const DlpEngine = (() => {
           category: p.category,
           valueGroup: p.valueGroup,
           lit: p.lit || null, // required literal word — cheap indexOf gate
+          validate: typeof p.validate === 'function' ? p.validate : null,
+          mask: p.mask || null, // per-pattern mask-style override ('stars')
         });
       } catch (_e) {
         // A pattern this browser build can't compile is skipped, never fatal.
+      }
+    }
+    // User-defined protected terms (server names, client names, codenames…).
+    minLen = 6;
+    if (enabledCategories.custom !== false && Array.isArray(customTerms)) {
+      const terms = [...new Set(customTerms.map((t) => String(t).trim()).filter((t) => t.length >= 2))]
+        .sort((a, b) => b.length - a.length);
+      for (const term of terms) {
+        try {
+          compiled.push({
+            re: new RegExp(`(?<![A-Za-z0-9_])${escapeRegex(term)}(?![A-Za-z0-9_])`, 'gi'),
+            label: 'CUSTOM_TERM',
+            category: 'custom',
+            valueGroup: 0,
+            // the lit gate lowercases via toLowerCase(), which can disagree
+            // with the regex 'i' flag for some Unicode pairs — ASCII only
+            lit: /^[\x00-\x7f]+$/.test(term) ? term.toLowerCase() : null,
+            validate: null,
+            mask: 'stars',
+          });
+          minLen = Math.min(minLen, Math.max(2, term.length));
+        } catch (_e) { /* skip unusable term */ }
       }
     }
     try {
@@ -62,20 +95,21 @@ const DlpEngine = (() => {
   // maxRanges bounds work on pathological page nodes; paste redaction passes
   // Infinity — it must never silently leave later secrets unredacted.
   function findRanges(text, maxRanges = 500) {
-    if (!compiled || !text || text.length < 6) return [];
+    if (!compiled || !text || text.length < minLen) return [];
 
     const hasAssignChar = text.indexOf('=') !== -1 || text.indexOf(':') !== -1;
     // A broken prefilter must fail open (run the patterns), never fail closed.
     const runAssignments =
       hasAssignChar && (!assignmentPrefilter || assignmentPrefilter.test(text));
-    const lower = runAssignments ? text.toLowerCase() : '';
+    let lowerCache = null;
+    const lower = () => (lowerCache ??= text.toLowerCase());
 
     const ranges = [];
     for (const p of compiled) {
-      if (p.category === 'assignment') {
-        if (!runAssignments) continue;
-        if (p.lit && lower.indexOf(p.lit) === -1) continue;
-      }
+      if (p.category === 'assignment' && !runAssignments) continue;
+      // literal gate (any category): a pattern whose required literal is
+      // absent can't match — indexOf is far cheaper than a regex scan
+      if (p.lit && lower().indexOf(p.lit) === -1) continue;
       p.re.lastIndex = 0;
       let m;
       while ((m = p.re.exec(text)) !== null) {
@@ -88,7 +122,8 @@ const DlpEngine = (() => {
           if (isPlaceholderValue(m[p.valueGroup])) continue;
           [start, end] = idx;
         }
-        ranges.push({ start, end, label: p.label, category: p.category });
+        if (p.validate && !p.validate(text.slice(start, end), text, start)) continue;
+        ranges.push({ start, end, label: p.label, category: p.category, mask: p.mask });
         if (ranges.length > maxRanges) return mergeRanges(ranges);
       }
     }
@@ -98,7 +133,7 @@ const DlpEngine = (() => {
   // For identical ranges, the category decides the mask style — token wins so
   // e.g. AWS_ACCESS_KEY_ID="ASIA…" keeps its identifiable prefix rather than
   // getting the assignment pattern's full-star mask.
-  const CATEGORY_PRIORITY = { token: 0, privatekey: 1, assignment: 2, infra: 3, generic: 4 };
+  const CATEGORY_PRIORITY = { custom: 0, token: 1, privatekey: 2, assignment: 3, pii: 4, infra: 5, generic: 6 };
 
   // Sort by start; overlapping ranges are merged (extended), never dropped —
   // a partially-overlapping detection must not leave its tail unmasked.
@@ -131,7 +166,8 @@ const DlpEngine = (() => {
     return '*'.repeat(Math.max(4, Math.min(n, STAR_CAP)));
   }
 
-  function maskValue(hidden, category) {
+  function maskValue(hidden, category, maskOverride) {
+    if (maskOverride === 'stars') return starRun(hidden.length);
     if (category === 'privatekey' && hidden.includes('\n')) {
       const lines = hidden.split('\n');
       let endIdx = -1;
@@ -161,12 +197,15 @@ const DlpEngine = (() => {
     let out = '';
     let pos = 0;
     for (const r of ranges) {
-      out += text.slice(pos, r.start) + maskValue(text.slice(r.start, r.end), r.category);
+      out += text.slice(pos, r.start) + maskValue(text.slice(r.start, r.end), r.category, r.mask);
       pos = r.end;
     }
     out += text.slice(pos);
     return { text: out, count: ranges.length };
   }
 
-  return Object.freeze({ CATEGORY_DEFAULTS, compile, findRanges, redactString, maskValue });
+  return Object.freeze({
+    CATEGORY_DEFAULTS, compile, findRanges, redactString, maskValue,
+    minTextLen: () => minLen,
+  });
 })();

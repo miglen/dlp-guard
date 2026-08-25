@@ -18,7 +18,9 @@
     dlp_maskOnPage: true,
     dlp_redactPaste: true,
     dlp_revealOnClick: true,
+    dlp_exfilShield: true,
     dlp_cats: DlpEngine.CATEGORY_DEFAULTS,
+    dlp_customTerms: [],
     dlp_disabledSites: [],
   });
 
@@ -28,7 +30,9 @@
     maskOnPage: true,
     redactPaste: true,
     revealOnClick: true,
+    exfilShield: true,
     cats: { ...DlpEngine.CATEGORY_DEFAULTS },
+    customTerms: [],
     disabledSites: [],
     suspendReason: null, // non-null → login/registration page, do nothing
     maskCount: 0,        // secrets currently hidden on this page
@@ -51,10 +55,23 @@
     STATE.maskOnPage = items.dlp_maskOnPage !== false;
     STATE.redactPaste = items.dlp_redactPaste !== false;
     STATE.revealOnClick = items.dlp_revealOnClick !== false;
+    STATE.exfilShield = items.dlp_exfilShield !== false;
     STATE.cats = { ...DlpEngine.CATEGORY_DEFAULTS, ...(items.dlp_cats || {}) };
+    STATE.customTerms = Array.isArray(items.dlp_customTerms) ? items.dlp_customTerms : [];
     STATE.disabledSites = Array.isArray(items.dlp_disabledSites) ? items.dlp_disabledSites : [];
-    DlpEngine.compile(STATE.cats);
+    DlpEngine.compile(STATE.cats, STATE.customTerms);
     scanGeneration++;
+  }
+
+  // Google Workspace editors do their own paste/DOM handling; rewriting their
+  // editing surface breaks them (the foundation extension skipped them too).
+  // The DOM-selector arm is gated on Google hostnames so an arbitrary page
+  // can't disable protection by mimicking Workspace class names.
+  function isWorkspaceEditor() {
+    if (/(^|\.)docs\.google\.com$/.test(location.hostname)) return true;
+    if (!/\.google\.com$/.test(location.hostname)) return false;
+    return Boolean(document.querySelector(
+      '.kix-appview-editor, .docs-texteventtarget-iframe, [id="docs-editor"]'));
   }
 
   function siteDisabled() {
@@ -69,6 +86,7 @@
     applySettings(items);
     STATE.ready = true;
     evaluateGuard(true);
+    deliverEarlyPaste();
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', () => scheduleFullScan());
     } else {
@@ -92,7 +110,8 @@
   // ── Login/registration page guard ──────────────────────────────────────────
 
   function evaluateGuard(initial) {
-    const reason = PageGuard.suspendReason();
+    const reason = PageGuard.suspendReason() ||
+      (isWorkspaceEditor() ? 'Google Workspace editor (compatibility skip)' : null);
     if (reason && !STATE.suspendReason) {
       STATE.suspendReason = reason;
       scanGeneration++; // kill in-flight scans immediately
@@ -176,7 +195,7 @@
     if (!node.isConnected) return;
     if (!fromFullScan && ourTextNodes.has(node)) return;
     const text = node.nodeValue;
-    if (!text || text.length < 6) return;
+    if (!text || text.length < DlpEngine.minTextLen()) return;
     if (shouldSkipNode(node)) return;
 
     const ranges = DlpEngine.findRanges(text);
@@ -372,6 +391,34 @@
   /** Armed bypass: content-bound — only a re-paste of EXACTLY this text,
    *  within the window, goes through as the original. */
   let armed = null; // { raw, count, until }
+  /** A paste that arrived before settings loaded — held back (fail-closed)
+   *  and delivered through the normal redaction flow once ready. */
+  let earlyPaste = null; // { editable, raw }
+
+  function deliverEarlyPaste() {
+    const ep = earlyPaste;
+    if (!ep) return;
+    earlyPaste = null;
+    if (!ep.editable.isConnected) return;
+    const redact = isActive() && STATE.redactPaste &&
+      !PageGuard.suspendReason() && !isWorkspaceEditor() &&
+      !PageGuard.inPasswordForm(ep.editable);
+    if (!redact) {
+      insertText(ep.editable, ep.raw);
+      return;
+    }
+    const { text: sanitized, count } = DlpEngine.redactString(ep.raw);
+    insertText(ep.editable, count ? sanitized : ep.raw);
+    if (count > 0) {
+      STATE.pasteCount += count;
+      reportCount();
+      showToast(`${count} secret${count > 1 ? 's' : ''} redacted from paste`, {
+        actionLabel: 'Paste original',
+        onAction: bypassLastPaste,
+      });
+      lastPaste = { editable: ep.editable, raw: ep.raw, sanitized, count };
+    }
+  }
 
   // Registered on window in the capture phase at document_start, so it runs
   // before any page-registered paste listener can read the raw clipboard.
@@ -380,11 +427,22 @@
     // browser's default insertion — ignore them entirely (they must not be
     // able to consume the armed bypass or pop misleading toasts).
     if (!event.isTrusted) return;
-    if (!STATE.ready || !STATE.enabled || !STATE.redactPaste || siteDisabled()) return;
+    // Settings not loaded yet: fail CLOSED — hold the paste back and deliver
+    // it through the normal redaction flow once storage arrives.
+    if (!STATE.ready) {
+      const editable = getEditableRoot(event.target);
+      const raw = event.clipboardData?.getData('text');
+      if (!editable || !raw) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      earlyPaste = { editable, raw };
+      return;
+    }
+    if (!STATE.enabled || !STATE.redactPaste || siteDisabled()) return;
     // Re-check the guard synchronously — a login modal may have appeared
     // within the observer debounce window, or a password field may currently
     // be toggled to type="text".
-    if (STATE.suspendReason || PageGuard.suspendReason()) return;
+    if (STATE.suspendReason || PageGuard.suspendReason() || isWorkspaceEditor()) return;
 
     const target = event.target;
     const editable = getEditableRoot(target);
@@ -480,6 +538,49 @@
     try { return document.execCommand('insertText', false, text); }
     catch (_e) { return false; }
   }
+
+  // ── Exfiltration shield ────────────────────────────────────────────────────
+  // Copying a selection containing many detected secrets is blocked — the
+  // clipboard gets a notice instead. Single-secret copies stay untouched;
+  // this only guards against bulk exfiltration (threshold below).
+  const EXFIL_THRESHOLD = 10;
+
+  function selectedTextForCopy() {
+    const sel = window.getSelection();
+    const text = sel ? sel.toString() : '';
+    if (text.trim()) return text;
+    const active = document.activeElement;
+    if (active && (active instanceof HTMLTextAreaElement ||
+        (active instanceof HTMLInputElement && !PageGuard.isPasswordInput(active)))) {
+      const s = active.selectionStart ?? 0;
+      const e = active.selectionEnd ?? 0;
+      try { return active.value.substring(s, e); } catch (_e) { return ''; }
+    }
+    return '';
+  }
+
+  window.addEventListener('copy', (event) => {
+    if (!event.isTrusted) return;
+    if (!STATE.ready || !STATE.enabled || !STATE.exfilShield || siteDisabled()) return;
+    if (STATE.suspendReason) return;
+    const selected = selectedTextForCopy();
+    if (!selected || selected.length < 60) return;
+    const ranges = DlpEngine.findRanges(selected, Infinity);
+    if (ranges.length < EXFIL_THRESHOLD) return;
+    event.preventDefault();
+    event.stopImmediatePropagation(); // page copy handlers must not override the block
+    event.clipboardData?.setData(
+      'text/plain',
+      `[DLP Guard] Copy blocked: selection contained ${ranges.length} secrets.`);
+    showToast(`blocked copying ${ranges.length} secrets (exfiltration shield)`);
+    try {
+      chrome.runtime.sendMessage({
+        type: 'DLP_EXFIL_BLOCK',
+        secrets: ranges.length,
+        host: location.hostname,
+      });
+    } catch (_e) { /* extension reloaded */ }
+  }, true);
 
   function reportBypass(kind, secrets) {
     try {
