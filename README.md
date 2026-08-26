@@ -65,12 +65,21 @@ DOM or to storage), and only *counts* are sent to the service worker for the bad
   PII patterns live in hand-written [src/patterns.extra.js](src/patterns.extra.js)
   (ported from the SafeRelay foundation's validated set, since the leakin dataset
   has no PII patterns); everything else is generated from the dataset.
-- **File-upload scanning (warn-only)** — when you attach a file to an AI chatbot
-  (file picker, drag-and-drop, or paste), DLP Guard reads a *copy* and scans it with
-  the same engine before it's sent. If it finds secrets, a warning panel names the
-  file(s) and what was found and suggests removing them — it **never changes or blocks
-  your file**. *Remove from upload* clears the file input for you; *Upload anyway* (or
-  ignoring the panel) is recorded in the stats. Configurable in the options page: on/off,
+- **File-upload scanning** — when you attach a file to an AI chatbot (file picker,
+  drag-and-drop, or paste), DLP Guard reads a *copy* and scans it with the same engine.
+  If it finds secrets, a warning panel names the file(s) and what was found. Two modes:
+  - **Warn + remove (default)** — the file attaches, then the panel's *Remove from
+    upload* detaches it through the **app's own Remove control** (finding the
+    attachment card by filename and clicking its Remove button, with a full
+    pointer/mouse-event fallback). This is the only reliable removal on React SPAs like
+    claude.ai, where clearing the file input is a no-op because the app has already read
+    the file into component state. *Upload anyway* (or ignoring the panel) is recorded.
+  - **Block before attach (opt-in)** — holds each upload in the capture phase, scans it,
+    and stops a flagged file from attaching at all (a clean file is replayed through so
+    it attaches normally). Stronger, but holding/replaying is less reliable on some
+    uploaders, so it's off by default.
+
+  Configurable in the options page: on/off,
   a max file size, and the list of extensions / filenames to scan (defaults cover text
   and credential files — `.env`, `.pem`, `id_rsa`, `credentials`, `.npmrc`, configs,
   source, etc.). **Extensionless files** (a private cert saved as `id_rsa`, `cert`,

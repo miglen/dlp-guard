@@ -166,6 +166,7 @@ chrome.runtime.onInstalled.addListener(() => {
       dlp_skipCloudEditors: true,
       dlp_fileScanEnabled: true,
       dlp_fileMaxSizeKB: 1024,
+      dlp_fileHardBlock: false,
       dlp_disabledSites: [],
     };
     const missing = {};

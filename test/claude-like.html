@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>claude.ai-like uploader repro</title></head>
+<body>
+<h1>claude.ai-like uploader repro</h1>
+<div id="composer">
+  <button id="attachBtn">＋</button>
+  <input type="file" id="chat-input-file-upload-onpage" multiple style="display:none">
+  <div id="thumbs"></div>
+</div>
+<div id="log">log:</div>
+<script>
+  // Simulate claude.ai: read FileList into JS state ONCE on change; the input
+  // is then emptied (input.value='') by the app itself, so input.files is []
+  // afterwards. Removal only happens through the per-thumbnail Remove button,
+  // which mutates the JS state and re-renders.
+  const state = { files: [] }; // the "React state"
+  const log = (m) => { document.getElementById('log').textContent += '\n' + m; };
+  const input = document.getElementById('chat-input-file-upload-onpage');
+  document.getElementById('attachBtn').addEventListener('click', () => input.click());
+
+  input.addEventListener('change', (e) => {
+    for (const f of e.target.files) state.files.push(f);
+    log('app read ' + e.target.files.length + ' file(s) into state; total=' + state.files.length);
+    e.target.value = ''; // app clears the input — input.files is now []
+    render();
+  });
+
+  function render() {
+    const host = document.getElementById('thumbs');
+    host.innerHTML = '';
+    state.files.forEach((f, i) => {
+      const card = document.createElement('div');
+      card.className = 'group/thumbnail';
+      card.style.cssText = 'display:inline-block;border:1px solid #ccc;border-radius:8px;padding:8px;margin:4px;';
+      const h3 = document.createElement('h3');
+      h3.textContent = f.name; h3.style.cssText = 'margin:0;font:13px monospace;';
+      card.appendChild(h3);
+      const btn = document.createElement('button');
+      btn.setAttribute('aria-label', 'Remove');
+      btn.textContent = '✕';
+      btn.style.cssText = 'opacity:0;';  // hidden until hover, but present + clickable
+      btn.addEventListener('click', () => { state.files.splice(i, 1); log('app removed "' + f.name + '" from state; total=' + state.files.length); render(); });
+      card.appendChild(btn);
+      host.appendChild(card);
+    });
+  }
+  window.__state = state;
+</script>
+</body>
+</html>

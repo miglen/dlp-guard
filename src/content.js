@@ -31,6 +31,7 @@
     dlp_fileScanEnabled: true,    // scan files before chatbot upload
     dlp_fileExtensions: DlpEngine.FILE_EXTENSIONS_DEFAULT,
     dlp_fileMaxSizeKB: 1024,      // skip files larger than this
+    dlp_fileHardBlock: false,     // hold uploads, scan, block flagged before attach
     dlp_disabledSites: [],
   });
 
@@ -53,6 +54,7 @@
     fileScanEnabled: true,
     fileExtensions: DlpEngine.FILE_EXTENSIONS_DEFAULT,
     fileMaxBytes: 1024 * 1024,
+    fileHardBlock: false,
     disabledSites: [],
     suspendReason: null, // non-null → login/registration page, do nothing
     maskCount: 0,        // secrets currently hidden on this page
@@ -88,6 +90,7 @@
     STATE.fileScanEnabled = items.dlp_fileScanEnabled !== false;
     STATE.fileExtensions = Array.isArray(items.dlp_fileExtensions) ? items.dlp_fileExtensions : DlpEngine.FILE_EXTENSIONS_DEFAULT;
     STATE.fileMaxBytes = (Number(items.dlp_fileMaxSizeKB) > 0 ? Number(items.dlp_fileMaxSizeKB) : 1024) * 1024;
+    STATE.fileHardBlock = items.dlp_fileHardBlock === true;
     STATE.disabledSites = Array.isArray(items.dlp_disabledSites) ? items.dlp_disabledSites : [];
     DlpEngine.compile(STATE.cats, STATE.customTerms, STATE.userPatterns, STATE.builtinOverrides);
     scanGeneration++;
@@ -714,21 +717,185 @@
     } catch (_e) { /* extension reloaded */ }
   }
 
-  // file input: fires after the user picks files. Listen on BOTH window and
-  // document (capture) so a page that stops propagation at either level can't
-  // hide the selection from us; the scannedFiles WeakSet dedupes File objects.
-  const onChange = (event) => {
+  // ── Removing an attached file via the app's OWN control ─────────────────────
+  // React SPAs (claude.ai, ChatGPT…) read the FileList once and keep the file in
+  // component state — clearing input.value/files is a no-op. The only reliable
+  // removal is the app's per-attachment Remove button, routed through its own
+  // handlers. We find the attachment card by its visible filename and click it.
+  const REMOVE_BTN_SEL =
+    'button[aria-label*="remove" i],button[title*="remove" i],[role="button"][aria-label*="remove" i],button[aria-label*="delete" i],button[aria-label*="dismiss" i]';
+
+  function findAttachmentCards(name) {
+    const lname = String(name).toLowerCase();
+    const out = [];
+    // Known claude.ai container, plus common attachment/thumbnail patterns.
+    let candidates = [];
+    try {
+      candidates = [...document.querySelectorAll(
+        '.group\\/thumbnail, [data-testid*="attachment" i], [data-testid*="file" i], [class*="thumbnail" i], [class*="attachment" i]')];
+    } catch (_e) { candidates = []; }
+    for (const c of candidates) {
+      if (c.querySelector(REMOVE_BTN_SEL) && (c.textContent || '').toLowerCase().includes(lname)) out.push(c);
+    }
+    if (out.length) return out;
+    // Generic fallback: walk up from each Remove button to the nearest container
+    // that also shows the filename.
+    for (const btn of document.querySelectorAll(REMOVE_BTN_SEL)) {
+      let el = btn;
+      for (let i = 0; i < 8 && el; i++, el = el.parentElement) {
+        if ((el.textContent || '').toLowerCase().includes(lname)) { out.push(el); break; }
+      }
+    }
+    return out;
+  }
+
+  function fileStillAttached(name) {
+    return findAttachmentCards(name).length > 0;
+  }
+
+  function fireClick(btn, useSequence) {
+    if (!useSequence) { try { btn.click(); return; } catch (_e) { /* fall through */ } }
+    for (const type of ['pointerdown', 'mousedown', 'mouseup', 'click']) {
+      try {
+        const Ctor = type.startsWith('pointer') && typeof PointerEvent === 'function' ? PointerEvent : MouseEvent;
+        btn.dispatchEvent(new Ctor(type, { bubbles: true, cancelable: true, composed: true, view: window }));
+      } catch (_e) { /* ignore */ }
+    }
+  }
+
+  function clickRemoveFor(name, useSequence) {
+    for (const card of findAttachmentCards(name)) {
+      const btn = card.querySelector(REMOVE_BTN_SEL) ||
+        (card.matches && card.matches(REMOVE_BTN_SEL) ? card : null);
+      if (btn) { fireClick(btn, useSequence); return true; }
+    }
+    return false;
+  }
+
+  // Remove one flagged file. Returns true if we believe it was detached.
+  async function removeAttachedFile(name, sourceInput) {
+    if (clickRemoveFor(name, false)) {
+      await new Promise((r) => setTimeout(r, 200));
+      if (!fileStillAttached(name)) {
+        console.info(`${LOG_PREFIX} removed "${name}" via the app's Remove control.`);
+        return true;
+      }
+      // native click didn't take — retry with a full pointer/mouse sequence
+      if (clickRemoveFor(name, true)) {
+        await new Promise((r) => setTimeout(r, 200));
+        if (!fileStillAttached(name)) {
+          console.info(`${LOG_PREFIX} removed "${name}" via the app's Remove control (event sequence).`);
+          return true;
+        }
+      }
+      console.warn(`${LOG_PREFIX} clicked Remove for "${name}" but it is still attached — the app may use a different control.`);
+      return false;
+    }
+    // No app control found — clearing a plain input works for non-React uploaders.
+    if (sourceInput instanceof HTMLInputElement) {
+      try {
+        sourceInput.value = '';
+        sourceInput.dispatchEvent(new Event('input', { bubbles: true }));
+        sourceInput.dispatchEvent(new Event('change', { bubbles: true }));
+        console.info(`${LOG_PREFIX} cleared the file input for "${name}" (no app Remove control found).`);
+        return true;
+      } catch (_e) { /* fall through */ }
+    }
+    console.warn(`${LOG_PREFIX} could not remove "${name}" — no Remove control or clearable input was found. Please remove it manually.`);
+    return false;
+  }
+
+  // Scan a snapshot of files; resolve to the risky[] list (may be empty).
+  async function scanFileSnapshot(files) {
+    const risky = [];
+    for (const file of files) {
+      if (!file) continue;
+      if (!DlpEngine.shouldScanFile(file.name, file.size, STATE.fileExtensions, STATE.fileMaxBytes)) continue;
+      let text;
+      try { text = await file.text(); } catch (_e) { continue; }
+      if (!text || DlpEngine.looksBinary(text)) continue;
+      const ranges = DlpEngine.findRanges(text, 2000);
+      if (ranges.length === 0) continue;
+      risky.push({ name: file.name, count: ranges.length, labels: [...new Set(ranges.map((r) => r.label))].slice(0, 6) });
+    }
+    return risky;
+  }
+
+  // Hard-block: hold the event synchronously (before React sees it), scan, then
+  // either replay a clean upload so the app attaches it, or block a flagged one
+  // so it is never attached. Opt-in (dlp_fileHardBlock) — holding+replaying can
+  // be fragile on some SPA uploaders, so the reliable default is attach+remove.
+  // Replay marker lives on the EVENT (not the input), so BOTH capture listeners
+  // (window + document) recognize a replayed event and skip it — consuming an
+  // input-level flag in the first listener would make the second re-block it.
+  const REPLAY = '__dlpReplay';
+
+  function replayChange(input) {
+    const ev = new Event('change', { bubbles: true });
+    ev[REPLAY] = true;
+    input.dispatchEvent(ev);
+  }
+
+  function onChange(event) {
     const t = event.target;
-    if (t instanceof HTMLInputElement && t.type === 'file') handleFiles(t.files, t);
-  };
+    if (!(t instanceof HTMLInputElement) || t.type !== 'file') return;
+    if (event[REPLAY]) return; // our own replay — let the app attach it
+    const files = t.files;
+    if (!files || !files.length) return;
+    if (STATE.fileHardBlock && fileScanActive()) {
+      event.stopImmediatePropagation();
+      event.preventDefault();
+      const snapshot = [...files];
+      scanFileSnapshot(snapshot).then((risky) => {
+        if (risky.length === 0) {
+          console.info(`${LOG_PREFIX} file(s) clean — allowed to attach.`);
+          replayChange(t);
+        } else {
+          const total = risky.reduce((n, f) => n + f.count, 0);
+          console.info(`${LOG_PREFIX} blocked ${risky.length} file(s) with ${total} secret(s) before attach.`);
+          reportFileStat('detected', total);
+          showFileWarning(risky, t, { blocked: true, replay: () => replayChange(t) });
+        }
+      });
+      return;
+    }
+    handleFiles(files, t);
+  }
+
+  function onDrop(event) {
+    if (event[REPLAY]) return; // our own replay — let the app attach it
+    const files = event.dataTransfer && event.dataTransfer.files;
+    if (!files || !files.length) return;
+    if (STATE.fileHardBlock && fileScanActive()) {
+      const snapshot = [...files];
+      event.stopImmediatePropagation();
+      event.preventDefault();
+      scanFileSnapshot(snapshot).then((risky) => {
+        if (risky.length === 0) {
+          console.info(`${LOG_PREFIX} dropped file(s) clean — re-dispatching drop.`);
+          try {
+            const dt = new DataTransfer();
+            for (const f of snapshot) dt.items.add(f);
+            const ev = new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt });
+            ev[REPLAY] = true;
+            (event.target || document).dispatchEvent(ev);
+          } catch (_e) { /* some browsers block synthetic DragEvent — nothing more we can do */ }
+        } else {
+          const total = risky.reduce((n, f) => n + f.count, 0);
+          console.info(`${LOG_PREFIX} blocked ${risky.length} dropped file(s) with ${total} secret(s) before attach.`);
+          reportFileStat('detected', total);
+          showFileWarning(risky, null, { blocked: true });
+        }
+      });
+      return;
+    }
+    handleFiles(files, null);
+  }
+
+  // Listen on BOTH window and document (capture) so a page that stops
+  // propagation at either level can't hide the selection; scannedFiles dedupes.
   window.addEventListener('change', onChange, true);
   document.addEventListener('change', onChange, true);
-
-  // drag-and-drop onto the page
-  const onDrop = (event) => {
-    const files = event.dataTransfer && event.dataTransfer.files;
-    if (files && files.length) handleFiles(files, null);
-  };
   window.addEventListener('drop', onDrop, true);
   document.addEventListener('drop', onDrop, true);
 
@@ -874,7 +1041,9 @@
   // one outcome is recorded: 'removed' (user cleared it) or 'anyway' (kept it,
   // or ignored the panel until it timed out).
   let activeFilePanel = null;
-  function showFileWarning(risky, sourceInput) {
+  function showFileWarning(risky, sourceInput, opts) {
+    opts = opts || {};
+    const blocked = opts.blocked === true;
     if (activeFilePanel) { clearTimeout(activeFilePanel.timer); activeFilePanel.host.remove(); activeFilePanel = null; }
     const totalSecrets = risky.reduce((n, f) => n + f.count, 0);
     let resolved = false;
@@ -892,12 +1061,16 @@
 
     const title = document.createElement('div');
     title.style.cssText = 'font-weight:700;color:#9b1c1c;margin-bottom:6px;font-size:14px;';
-    title.textContent = `🛡️ Don't upload — ${totalSecrets} secret${totalSecrets > 1 ? 's' : ''} found`;
+    title.textContent = blocked
+      ? `🛡️ Blocked — ${totalSecrets} secret${totalSecrets > 1 ? 's' : ''} found`
+      : `🛡️ Don't upload — ${totalSecrets} secret${totalSecrets > 1 ? 's' : ''} found`;
     box.appendChild(title);
 
     const intro = document.createElement('div');
     intro.style.cssText = 'color:#374151;margin-bottom:8px;';
-    intro.textContent = `${risky.length === 1 ? 'This file looks like it contains' : 'These files look like they contain'} secrets. Uploading to this AI tool would expose them. Please remove ${risky.length === 1 ? 'it' : 'them'} first — DLP Guard will not change your file.`;
+    intro.textContent = blocked
+      ? `DLP Guard stopped ${risky.length === 1 ? 'this file' : 'these files'} from attaching, because ${risky.length === 1 ? 'it looks like it contains' : 'they look like they contain'} secrets.`
+      : `${risky.length === 1 ? 'This file looks like it contains' : 'These files look like they contain'} secrets. Uploading to this AI tool would expose them — DLP Guard will not change your file.`;
     box.appendChild(intro);
 
     const list = document.createElement('ul');
@@ -930,9 +1103,10 @@
       return b;
     };
 
-    const canClear = sourceInput instanceof HTMLInputElement;
-    const removeBtn = mk(canClear ? 'Remove from upload' : 'I removed it', true);
-    const keepBtn = mk('Upload anyway', false);
+    // Primary / secondary actions depend on whether the file was pre-blocked.
+    const primaryBtn = mk(blocked ? 'Keep blocked' : 'Remove from upload', true);
+    const canAttachAnyway = !blocked || typeof opts.replay === 'function';
+    const secondaryBtn = canAttachAnyway ? mk(blocked ? 'Attach anyway' : 'Upload anyway', false) : null;
 
     function finish(kind) {
       if (resolved) return;
@@ -946,29 +1120,35 @@
       const r = btn.getBoundingClientRect();
       return r.width > 0 && r.width <= 260 && r.height <= 60 && r.top <= 160 && r.right >= window.innerWidth - 480;
     }
-    removeBtn.addEventListener('click', (e) => {
-      if (!e.isTrusted || !geomSane(removeBtn)) return;
-      if (canClear) {
-        try {
-          sourceInput.value = '';
-          sourceInput.dispatchEvent(new Event('input', { bubbles: true }));
-          sourceInput.dispatchEvent(new Event('change', { bubbles: true }));
-        } catch (_e) { /* best effort */ }
-      }
+    primaryBtn.addEventListener('click', (e) => {
+      if (!e.isTrusted || !geomSane(primaryBtn)) return;
       finish('removed');
-      showToast(canClear ? 'file removed from the upload' : 'thanks — remove the attachment in the chat to be safe');
+      if (!blocked) {
+        // Detach each flagged file via the app's own Remove control.
+        Promise.all(risky.map((f) => removeAttachedFile(f.name, sourceInput))).then((oks) => {
+          const done = oks.filter(Boolean).length;
+          showToast(done === risky.length
+            ? `removed ${done} file${done > 1 ? 's' : ''} from the upload`
+            : `removed ${done}/${risky.length} — remove the rest in the chat to be safe`);
+        });
+      }
     });
-    keepBtn.addEventListener('click', (e) => {
-      if (!e.isTrusted || !geomSane(keepBtn)) return;
-      finish('anyway');
-    });
-    row.append(removeBtn, keepBtn);
+    if (secondaryBtn) {
+      secondaryBtn.addEventListener('click', (e) => {
+        if (!e.isTrusted || !geomSane(secondaryBtn)) return;
+        finish('anyway');
+        if (blocked && typeof opts.replay === 'function') opts.replay();
+      });
+    }
+    row.append(primaryBtn);
+    if (secondaryBtn) row.append(secondaryBtn);
     box.appendChild(row);
     root.appendChild(box);
     (document.body || document.documentElement).appendChild(host);
 
-    // If ignored, treat it as "kept" — the file is still attached.
-    const timer = setTimeout(() => finish('anyway'), 20000);
+    // If ignored: attach-then-remove leaves the file attached ('anyway'); a
+    // hard-block leaves it blocked ('removed').
+    const timer = setTimeout(() => finish(blocked ? 'removed' : 'anyway'), 20000);
     activeFilePanel = { host, timer };
   }
 })();
