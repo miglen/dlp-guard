@@ -1,4 +1,10 @@
-# DLP Guard — Prompt Firewall for AI
+<p align="center">
+  <img src="icons/icon128.png" width="112" height="112" alt="DLP Guard icon">
+</p>
+
+<h1 align="center">DLP Guard — Prompt Firewall for AI</h1>
+
+<p align="center"><em>Keep secrets and personal data out of AI chats and web pages. 100% local.</em></p>
 
 Browser extension (Manifest V3) that **detects secrets rendered on web pages and hides
 them**, and **redacts secrets on paste** before they reach AI chat inputs.
