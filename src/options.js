@@ -509,7 +509,7 @@ function renderChart(daily) {
   const plotH = H - padB - padT;
   const groupW = (W - padL - 8) / data.length;
   const barW = Math.max(2.5, (groupW - 8) / KINDS.length);
-  const COLORS = { paste: '#e02424', reveal: '#c27803', exfil: '#1f6feb', file: '#059669' };
+  const COLORS = { paste: '#5a4869', reveal: '#d49a5a', exfil: '#7f94ad', file: '#6e9c7e' };
   const y = (v) => padT + plotH - (v / max) * plotH;
 
   const parts = [];
