@@ -1,4 +1,4 @@
-# DLP Guard — Secret Detector & Hider
+# DLP Guard — Prompt Firewall for AI
 
 Browser extension (Manifest V3) that **detects secrets rendered on web pages and hides
 them**, and **redacts secrets on paste** before they reach AI chat inputs.

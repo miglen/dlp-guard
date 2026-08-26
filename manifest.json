@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "DLP Guard — Secret Detector & Hider",
+  "name": "DLP Guard — Prompt Firewall for AI",
   "version": "0.1.0",
   "description": "Hides secrets, API keys, and tokens on web pages and redacts pastes. 100% local. Never runs on login or registration pages.",
   "author": "Miglen Evlogiev",
