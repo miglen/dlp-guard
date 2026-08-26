@@ -1,5 +1,20 @@
+# OS / editor
 .DS_Store
+
+# node
 node_modules/
+
+# build artifacts
 *.zip
 *.crx
 *.pem
+
+# third-party reference extension (not ours, not published)
+ODEOILOOELKODAHBBDOKBOLLGAHDCAAG_*/
+
+# upstream scanner repos used only for local rule extraction
+trufflehog/
+gitleaks/
+
+# extracted third-party rule datasets (derived from trufflehog/gitleaks)
+extracted/
