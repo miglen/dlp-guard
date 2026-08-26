@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="icons/icon128.png" width="112" height="112" alt="DLP Guard icon">
+  <img src="icons/logo.png" width="220" alt="DLP Guard logo">
 </p>
 
 <h1 align="center">DLP Guard — Prompt Firewall for AI</h1>
