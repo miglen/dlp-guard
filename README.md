@@ -163,10 +163,20 @@ src/pageguard.js             login/registration page detection
 src/content.js               DOM masking, MutationObserver, paste redaction
 src/background.js            badge counts, first-run defaults
 popup.html, src/popup.js     settings UI
+options.html, src/options.js advanced settings page
+src/yaml.js                  YAML export/import (dependency-free)
 tools/convert-patterns.mjs   YAML dataset → patterns.generated.js
 tools/test-patterns.mjs      test suite (compile, ReDoS, TP/FP, redaction)
-tools/make-icons.mjs         icon generator
+tools/test-yaml.mjs          YAML round-trip tests
+tools/build.sh               package the runtime into a Web Store ZIP
 test/*.html                  manual test fixtures
+```
+
+Build the Chrome Web Store package (a ZIP with the runtime files only; the
+store produces the signed CRX after review):
+
+```bash
+sh tools/build.sh   # → dist/dlp-guard-<version>.zip
 ```
 
 Regenerate patterns after updating the dataset:

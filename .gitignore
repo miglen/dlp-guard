@@ -18,3 +18,4 @@ gitleaks/
 
 # extracted third-party rule datasets (derived from trufflehog/gitleaks)
 extracted/
+dist/
