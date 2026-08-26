@@ -32,6 +32,8 @@
     dlp_fileExtensions: DlpEngine.FILE_EXTENSIONS_DEFAULT,
     dlp_fileMaxSizeKB: 1024,      // skip files larger than this
     dlp_fileHardBlock: false,     // hold uploads, scan, block flagged before attach
+    dlp_fileScanPII: false,       // also scan files for PII (emails/SSNs/cards/…)
+    dlp_fileAutoRemove: false,    // remove flagged files automatically, no prompt
     dlp_disabledSites: [],
   });
 
@@ -55,6 +57,8 @@
     fileExtensions: DlpEngine.FILE_EXTENSIONS_DEFAULT,
     fileMaxBytes: 1024 * 1024,
     fileHardBlock: false,
+    fileScanPII: false,
+    fileAutoRemove: false,
     disabledSites: [],
     suspendReason: null, // non-null → login/registration page, do nothing
     maskCount: 0,        // secrets currently hidden on this page
@@ -91,6 +95,8 @@
     STATE.fileExtensions = Array.isArray(items.dlp_fileExtensions) ? items.dlp_fileExtensions : DlpEngine.FILE_EXTENSIONS_DEFAULT;
     STATE.fileMaxBytes = (Number(items.dlp_fileMaxSizeKB) > 0 ? Number(items.dlp_fileMaxSizeKB) : 1024) * 1024;
     STATE.fileHardBlock = items.dlp_fileHardBlock === true;
+    STATE.fileScanPII = items.dlp_fileScanPII === true;
+    STATE.fileAutoRemove = items.dlp_fileAutoRemove === true;
     STATE.disabledSites = Array.isArray(items.dlp_disabledSites) ? items.dlp_disabledSites : [];
     DlpEngine.compile(STATE.cats, STATE.customTerms, STATE.userPatterns, STATE.builtinOverrides);
     scanGeneration++;
@@ -672,6 +678,24 @@
       !siteDisabled() && !STATE.suspendReason;
   }
 
+  // Scan file text for secrets, plus PII when the file-PII option is on (so a
+  // CSV/export full of emails/SSNs/cards is caught even if page-wide PII
+  // masking is off). Exact-position dedupe avoids double-counting when page
+  // PII is also enabled.
+  function fileFindRanges(text) {
+    const base = DlpEngine.findRanges(text, 2000);
+    if (!STATE.fileScanPII) return base;
+    const pii = DlpEngine.findPII(text, 5000);
+    if (pii.length === 0) return base;
+    const seen = new Set(base.map((r) => `${r.start}:${r.end}`));
+    const out = base.slice();
+    for (const r of pii) {
+      const k = `${r.start}:${r.end}`;
+      if (!seen.has(k)) { seen.add(k); out.push(r); }
+    }
+    return out;
+  }
+
   async function handleFiles(fileList, sourceInput) {
     if (!fileList || fileList.length === 0) return;
     if (!fileScanActive()) {
@@ -697,8 +721,8 @@
         console.info(`${LOG_PREFIX} not scanning "${file.name}" — looks binary`);
         continue;
       }
-      const ranges = DlpEngine.findRanges(text, 2000);
-      console.info(`${LOG_PREFIX} scanned "${file.name}" — ${ranges.length} secret(s) found`);
+      const ranges = fileFindRanges(text);
+      console.info(`${LOG_PREFIX} scanned "${file.name}" — ${ranges.length} sensitive item(s) found`);
       if (ranges.length === 0) continue;
       const labels = [...new Set(ranges.map((r) => r.label))].slice(0, 6);
       risky.push({ name: file.name, count: ranges.length, labels });
@@ -706,6 +730,17 @@
     if (risky.length === 0) return;
     const totalSecrets = risky.reduce((n, f) => n + f.count, 0);
     reportFileStat('detected', totalSecrets);
+    if (STATE.fileAutoRemove) {
+      // Remove flagged files automatically, no prompt (opt-in general setting).
+      Promise.all(risky.map((f) => removeAttachedFile(f.name, sourceInput))).then((oks) => {
+        const done = oks.filter(Boolean).length;
+        reportFileStat('removed', totalSecrets);
+        showToast(done === risky.length
+          ? `auto-removed ${done} file${done > 1 ? 's' : ''} with sensitive data`
+          : `auto-removed ${done}/${risky.length} — remove the rest in the chat to be safe`);
+      });
+      return;
+    }
     showFileWarning(risky, sourceInput);
   }
 
@@ -814,7 +849,7 @@
       let text;
       try { text = await file.text(); } catch (_e) { continue; }
       if (!text || DlpEngine.looksBinary(text)) continue;
-      const ranges = DlpEngine.findRanges(text, 2000);
+      const ranges = fileFindRanges(text);
       if (ranges.length === 0) continue;
       risky.push({ name: file.name, count: ranges.length, labels: [...new Set(ranges.map((r) => r.label))].slice(0, 6) });
     }
@@ -1062,15 +1097,15 @@
     const title = document.createElement('div');
     title.style.cssText = 'font-weight:700;color:#9b1c1c;margin-bottom:6px;font-size:14px;';
     title.textContent = blocked
-      ? `🛡️ Blocked — ${totalSecrets} secret${totalSecrets > 1 ? 's' : ''} found`
-      : `🛡️ Don't upload — ${totalSecrets} secret${totalSecrets > 1 ? 's' : ''} found`;
+      ? `🛡️ Blocked — ${totalSecrets} sensitive item${totalSecrets > 1 ? 's' : ''} found`
+      : `🛡️ Don't upload — ${totalSecrets} sensitive item${totalSecrets > 1 ? 's' : ''} found`;
     box.appendChild(title);
 
     const intro = document.createElement('div');
     intro.style.cssText = 'color:#374151;margin-bottom:8px;';
     intro.textContent = blocked
-      ? `DLP Guard stopped ${risky.length === 1 ? 'this file' : 'these files'} from attaching, because ${risky.length === 1 ? 'it looks like it contains' : 'they look like they contain'} secrets.`
-      : `${risky.length === 1 ? 'This file looks like it contains' : 'These files look like they contain'} secrets. Uploading to this AI tool would expose them — DLP Guard will not change your file.`;
+      ? `DLP Guard stopped ${risky.length === 1 ? 'this file' : 'these files'} from attaching, because ${risky.length === 1 ? 'it looks like it contains' : 'they look like they contain'} secrets or personal data.`
+      : `${risky.length === 1 ? 'This file looks like it contains' : 'These files look like they contain'} secrets or personal data. Uploading to this AI tool would expose it — DLP Guard will not change your file.`;
     box.appendChild(intro);
 
     const list = document.createElement('ul');

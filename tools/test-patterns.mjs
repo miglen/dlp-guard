@@ -431,6 +431,21 @@ WRuPspPXIAHPKrjEHkUsgDZHW/V0fJWbIjJarw==
   expect('text is not binary', DlpEngine.looksBinary('api_key: 12345\nhello world') === false, '');
 }
 
+// ── 15h. findPII scans PII independently of page category state ──────────────
+{
+  // compile with PII OFF (page-wide) — findRanges must not find PII…
+  DlpEngine.compile({ token: true, assignment: true, privatekey: true, custom: true, user: true, pii: false, infra: false, generic: false });
+  const csv = 'name,email,ssn\nAlice,alice@example.com,123-45-6789\nBob,bob@example.com,234-56-7890\nCarol,carol@corp.io,345-67-8901';
+  expect('findRanges skips PII when page-PII off', DlpEngine.findRanges(csv).length === 0, JSON.stringify(DlpEngine.findRanges(csv)));
+  // …but findPII finds it regardless
+  const pii = DlpEngine.findPII(csv);
+  const labels = new Set(pii.map((r) => r.label));
+  expect('findPII detects bulk emails+SSNs in CSV', pii.length >= 6, `n=${pii.length}`);
+  expect('findPII labels include EMAIL and US_SSN', labels.has('EMAIL') && labels.has('US_SSN'), [...labels].join(','));
+  // findPII returns nothing for clean text
+  expect('findPII clean text empty', DlpEngine.findPII('just some ordinary notes about lunch').length === 0, '');
+}
+
 // ── 16. exfiltration threshold sanity (engine side) ───────────────────────────
 {
   const bulk = Array.from({ length: 12 }, (_, i) => `key${i}: AKIAIOSFODNN7EXAMPL${i % 10}`).join('\n');

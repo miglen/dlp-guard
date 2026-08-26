@@ -82,7 +82,11 @@ DOM or to storage), and only *counts* are sent to the service worker for the bad
   Configurable in the options page: on/off,
   a max file size, and the list of extensions / filenames to scan (defaults cover text
   and credential files — `.env`, `.pem`, `id_rsa`, `credentials`, `.npmrc`, configs,
-  source, etc.). **Extensionless files** (a private cert saved as `id_rsa`, `cert`,
+  source, etc.). Two more toggles: **Also scan files for PII** flags CSVs/exports full
+  of personal data (emails, SSNs, cards, IPs, phones, IBANs, national IDs) even when
+  page-wide PII masking is off — good for catching a data export you didn't mean to
+  share; **Auto-remove flagged files** removes a flagged file automatically (via the
+  same app-control mechanism) with just a toast, no prompt. **Extensionless files** (a private cert saved as `id_rsa`, `cert`,
   `server-key`, …) are always scanned, since keys and credentials are routinely saved
   without an extension. Binary office/image formats are out of scope (they'd need format
   parsers); files over the size limit or that sniff as binary are skipped. Open the

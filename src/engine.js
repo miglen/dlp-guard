@@ -156,7 +156,13 @@ const DlpEngine = (() => {
   // maxRanges bounds work on pathological page nodes; paste redaction passes
   // Infinity — it must never silently leave later secrets unredacted.
   function findRanges(text, maxRanges = 500) {
-    if (!compiled || !text || text.length < minLen) return [];
+    if (!compiled) return [];
+    return scanWith(compiled, text, maxRanges);
+  }
+
+  // Core scan loop over a given compiled pattern list.
+  function scanWith(list, text, maxRanges) {
+    if (!list || !text || text.length < minLen) return [];
 
     const hasAssignChar = text.indexOf('=') !== -1 || text.indexOf(':') !== -1;
     // A broken prefilter must fail open (run the patterns), never fail closed.
@@ -166,7 +172,7 @@ const DlpEngine = (() => {
     const lower = () => (lowerCache ??= text.toLowerCase());
 
     const ranges = [];
-    for (const p of compiled) {
+    for (const p of list) {
       // The shared assignment prefilter only knows the SHIPPED keywords, so it
       // must not gate an edited assignment built-in (or a user pattern in the
       // 'assignment' category) whose keyword it never saw.
@@ -192,6 +198,30 @@ const DlpEngine = (() => {
       }
     }
     return mergeRanges(ranges);
+  }
+
+  // PII patterns compiled once, on their own, so files can be scanned for PII
+  // (emails, SSNs, cards, IPs, phones, IBAN, national IDs…) independently of
+  // whether page-wide PII masking is enabled.
+  let piiCompiled = null;
+  function ensurePII() {
+    if (piiCompiled) return;
+    piiCompiled = [];
+    const extra = typeof DLP_EXTRA_PATTERNS !== 'undefined' ? DLP_EXTRA_PATTERNS : [];
+    for (const p of [...DLP_PATTERNS, ...extra]) {
+      if (p.category !== 'pii') continue;
+      try {
+        piiCompiled.push({
+          re: new RegExp(p.source, p.flags), label: p.label, category: 'pii',
+          valueGroup: p.valueGroup, lit: p.lit || null,
+          validate: typeof p.validate === 'function' ? p.validate : null, mask: p.mask || null,
+        });
+      } catch (_e) { /* skip */ }
+    }
+  }
+  function findPII(text, maxRanges = 5000) {
+    ensurePII();
+    return scanWith(piiCompiled, text, maxRanges);
   }
 
   // For identical ranges, the category decides the mask style — token wins so
@@ -326,7 +356,7 @@ const DlpEngine = (() => {
   }
 
   return Object.freeze({
-    CATEGORY_DEFAULTS, compile, findRanges, redactString, maskValue,
+    CATEGORY_DEFAULTS, compile, findRanges, findPII, redactString, maskValue,
     minTextLen: () => minLen,
     FILE_EXTENSIONS_DEFAULT, shouldScanFile, looksBinary,
     // Options page: the built-in patterns with stable ids, for per-regex
