@@ -171,6 +171,20 @@ const DLP_EXTRA_PATTERNS = [
     flags: 'g', valueGroup: 0, lit: '-',
   },
   {
+    // Phone (formatted): 3-3-4 with a separator, so bare digit runs (order
+    // ids, SSNs 3-2-4) don't match. Covers 415-555-1234, 415.555.1234,
+    // (415) 555-1234, +1 415 555 1234.
+    name: 'Phone number (formatted)', label: 'PHONE', category: 'pii',
+    source: '(?<!\\d)(?:\\+?1[ .\\-]?)?(?:\\(\\d{3}\\)|\\d{3})[ .\\-]\\d{3}[ .\\-]\\d{4}(?!\\d)',
+    flags: 'g', valueGroup: 0, lit: null,
+  },
+  {
+    // Phone (E.164 international): +<country><digits>, 8–15 digits total.
+    name: 'Phone number (E.164)', label: 'PHONE', category: 'pii',
+    source: '(?<![\\w+])\\+[1-9]\\d{7,14}(?!\\d)',
+    flags: 'g', valueGroup: 0, lit: '+',
+  },
+  {
     name: 'Credit card', label: 'CREDIT_CARD', category: 'pii',
     source: '\\b(?:\\d{4}[-\\s]?){3}\\d{3,4}\\b|\\b3[47]\\d{2}[-\\s]?\\d{6}[-\\s]?\\d{5}\\b',
     flags: 'g', valueGroup: 0, lit: null,

@@ -444,6 +444,13 @@ WRuPspPXIAHPKrjEHkUsgDZHW/V0fJWbIjJarw==
   expect('findPII labels include EMAIL and US_SSN', labels.has('EMAIL') && labels.has('US_SSN'), [...labels].join(','));
   // findPII returns nothing for clean text
   expect('findPII clean text empty', DlpEngine.findPII('just some ordinary notes about lunch').length === 0, '');
+
+  // phone numbers (formatted + E.164), but not bare digit runs / SSNs
+  const phones = 'call 415-555-1234 or (212) 555-6789 or +14155559999 or 617.555.0100';
+  const pl = DlpEngine.findPII(phones).filter((r) => r.label === 'PHONE');
+  expect('detects 4 phone formats', pl.length === 4, `n=${pl.length}`);
+  expect('bare 10-digit not a phone', DlpEngine.findPII('order 4155551234 shipped').filter((r) => r.label === 'PHONE').length === 0, '');
+  expect('SSN not matched as phone', DlpEngine.findPII('ssn 123-45-6789').filter((r) => r.label === 'PHONE').length === 0, '');
 }
 
 // ── 16. exfiltration threshold sanity (engine side) ───────────────────────────

@@ -33,6 +33,7 @@
     dlp_fileMaxSizeKB: 1024,      // skip files larger than this
     dlp_fileHardBlock: false,     // hold uploads, scan, block flagged before attach
     dlp_fileScanPII: false,       // also scan files for PII (emails/SSNs/cards/…)
+    dlp_filePIIThreshold: 5,      // PII flags a file only at this many items (bulk)
     dlp_fileAutoRemove: false,    // remove flagged files automatically, no prompt
     dlp_disabledSites: [],
   });
@@ -58,6 +59,7 @@
     fileMaxBytes: 1024 * 1024,
     fileHardBlock: false,
     fileScanPII: false,
+    filePIIThreshold: 5,
     fileAutoRemove: false,
     disabledSites: [],
     suspendReason: null, // non-null → login/registration page, do nothing
@@ -96,6 +98,7 @@
     STATE.fileMaxBytes = (Number(items.dlp_fileMaxSizeKB) > 0 ? Number(items.dlp_fileMaxSizeKB) : 1024) * 1024;
     STATE.fileHardBlock = items.dlp_fileHardBlock === true;
     STATE.fileScanPII = items.dlp_fileScanPII === true;
+    STATE.filePIIThreshold = Number(items.dlp_filePIIThreshold) > 0 ? Number(items.dlp_filePIIThreshold) : 5;
     STATE.fileAutoRemove = items.dlp_fileAutoRemove === true;
     STATE.disabledSites = Array.isArray(items.dlp_disabledSites) ? items.dlp_disabledSites : [];
     DlpEngine.compile(STATE.cats, STATE.customTerms, STATE.userPatterns, STATE.builtinOverrides);
@@ -678,22 +681,33 @@
       !siteDisabled() && !STATE.suspendReason;
   }
 
-  // Scan file text for secrets, plus PII when the file-PII option is on (so a
-  // CSV/export full of emails/SSNs/cards is caught even if page-wide PII
-  // masking is off). Exact-position dedupe avoids double-counting when page
-  // PII is also enabled.
-  function fileFindRanges(text) {
-    const base = DlpEngine.findRanges(text, 2000);
-    if (!STATE.fileScanPII) return base;
-    const pii = DlpEngine.findPII(text, 5000);
-    if (pii.length === 0) return base;
-    const seen = new Set(base.map((r) => `${r.start}:${r.end}`));
-    const out = base.slice();
-    for (const r of pii) {
-      const k = `${r.start}:${r.end}`;
-      if (!seen.has(k)) { seen.add(k); out.push(r); }
+  // Scan file text and decide whether the file is "risky". Secrets flag a file
+  // at the first hit; PII (emails, phones, SSNs, cards…) only flags a file in
+  // BULK — at least filePIIThreshold items — since a lone email in a config is
+  // not the concern, a spreadsheet/export full of contacts is.
+  // Returns null when not risky, else { count, labels } for the warning.
+  function scanFileForRisk(text) {
+    let base = DlpEngine.findRanges(text, 2000);
+    if (!STATE.fileScanPII) base = base.filter((r) => r.category !== 'pii');
+
+    let ranges = base;
+    if (STATE.fileScanPII) {
+      const pii = DlpEngine.findPII(text, 20000);
+      const seen = new Set(base.map((r) => `${r.start}:${r.end}`));
+      ranges = base.slice();
+      for (const r of pii) {
+        const k = `${r.start}:${r.end}`;
+        if (!seen.has(k)) { seen.add(k); ranges.push(r); }
+      }
     }
-    return out;
+    if (ranges.length === 0) return null;
+
+    let piiCount = 0;
+    for (const r of ranges) if (r.category === 'pii') piiCount++;
+    const secretCount = ranges.length - piiCount;
+    const flagged = secretCount > 0 || (STATE.fileScanPII && piiCount >= STATE.filePIIThreshold);
+    if (!flagged) return null;
+    return { count: ranges.length, labels: [...new Set(ranges.map((r) => r.label))].slice(0, 6) };
   }
 
   async function handleFiles(fileList, sourceInput) {
@@ -721,11 +735,10 @@
         console.info(`${LOG_PREFIX} not scanning "${file.name}" — looks binary`);
         continue;
       }
-      const ranges = fileFindRanges(text);
-      console.info(`${LOG_PREFIX} scanned "${file.name}" — ${ranges.length} sensitive item(s) found`);
-      if (ranges.length === 0) continue;
-      const labels = [...new Set(ranges.map((r) => r.label))].slice(0, 6);
-      risky.push({ name: file.name, count: ranges.length, labels });
+      const hit = scanFileForRisk(text);
+      console.info(`${LOG_PREFIX} scanned "${file.name}" — ${hit ? hit.count + ' sensitive item(s), flagged' : 'nothing flagged'}`);
+      if (!hit) continue;
+      risky.push({ name: file.name, count: hit.count, labels: hit.labels });
     }
     if (risky.length === 0) return;
     const totalSecrets = risky.reduce((n, f) => n + f.count, 0);
@@ -849,9 +862,9 @@
       let text;
       try { text = await file.text(); } catch (_e) { continue; }
       if (!text || DlpEngine.looksBinary(text)) continue;
-      const ranges = fileFindRanges(text);
-      if (ranges.length === 0) continue;
-      risky.push({ name: file.name, count: ranges.length, labels: [...new Set(ranges.map((r) => r.label))].slice(0, 6) });
+      const hit = scanFileForRisk(text);
+      if (!hit) continue;
+      risky.push({ name: file.name, count: hit.count, labels: hit.labels });
     }
     return risky;
   }

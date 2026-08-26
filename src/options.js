@@ -23,6 +23,7 @@ const DEFAULTS = {
   dlp_fileMaxSizeKB: 1024,
   dlp_fileHardBlock: false,
   dlp_fileScanPII: false,
+  dlp_filePIIThreshold: 5,
   dlp_fileAutoRemove: false,
   dlp_fileExtensions: (typeof DlpEngine !== 'undefined' && DlpEngine.FILE_EXTENSIONS_DEFAULT) ? [...DlpEngine.FILE_EXTENSIONS_DEFAULT] : [],
   dlp_cats: { ...CAT_DEFAULTS },
