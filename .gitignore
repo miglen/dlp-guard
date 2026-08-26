@@ -4,18 +4,7 @@
 # node
 node_modules/
 
-# build artifacts
+# build artifacts (dist/ holds the built *.zip)
 *.zip
 *.crx
 *.pem
-
-# third-party reference extension (not ours, not published)
-ODEOILOOELKODAHBBDOKBOLLGAHDCAAG_*/
-
-# upstream scanner repos used only for local rule extraction
-trufflehog/
-gitleaks/
-
-# extracted third-party rule datasets (derived from trufflehog/gitleaks)
-extracted/
-dist/
