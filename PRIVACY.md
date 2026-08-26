@@ -1,72 +1,68 @@
-# Privacy Policy — DLP Guard
+# DLP Guard Privacy Policy
 
 _Last updated: 26 August 2026_
 
-DLP Guard is a browser extension that detects sensitive data (secrets, API keys,
-tokens, private keys, and optionally personal data) and prevents it from leaking
-into web pages and AI chat tools. This policy explains exactly what the extension
-does and does not do with your data.
+DLP Guard is a browser extension that finds sensitive data (secrets, API keys,
+tokens, private keys, and optionally personal data) and keeps it from leaking into
+web pages and AI chats. This page explains what it does with your data.
 
-## The short version
+## In one line
 
-**DLP Guard collects nothing, sends nothing, and has no servers.** All processing
-happens locally in your browser. There are no accounts, no analytics, no tracking,
-and no third parties. The extension makes **no network requests** of any kind.
+DLP Guard collects nothing and sends nothing. It has no servers, no accounts, and no
+analytics, and it never makes a network request. Everything happens locally in your
+browser.
 
-## What the extension processes locally
+## What it looks at, locally
 
-To do its job, DLP Guard inspects content on the pages you visit:
+To do its job the extension has to read some of what is on the pages you use:
 
-- **Text you paste** into inputs and chat boxes.
-- **Files you attach or upload** to a page (read as a local copy).
-- **Text already rendered on a page**, to mask secrets shown there.
-- **Text you copy**, to warn about bulk copying of secrets.
+* Text you paste into inputs and chat boxes.
+* Files you attach or upload (it reads a local copy).
+* Text already shown on a page, so it can mask secrets that are visible.
+* Text you copy, so it can warn you before you copy a large block of secrets.
 
-This inspection happens **entirely on your device, in memory**. Detected values are
-matched against local pattern rules. The extension never transmits this content
-anywhere, and it does not write the sensitive values to disk.
+All of this is checked in memory, on your machine, against local pattern rules. None
+of that content is uploaded anywhere, and the actual secret values are never written
+to disk.
 
-## What is stored on your device
+## What it saves on your device
 
-DLP Guard uses your browser's local extension storage (`chrome.storage.local` and
-`chrome.storage.session`) to keep, **only on your own computer**:
+The extension uses your browser's own storage (`chrome.storage.local` and
+`chrome.storage.session`) to remember a few things, and only on your computer:
 
-- Your settings and configuration (which detections are on, custom patterns,
-  protected terms, per-site toggles, file-scan options).
-- Usage counters and a rolling activity log of events. The log records only
-  **metadata** — a timestamp, the site's hostname, the type of event, and how many
-  items were involved. It **never** stores the secret or personal values themselves.
+* Your settings: which detections are on, any custom patterns or protected words you
+  added, your per-site on/off choices, and the file-scan options.
+* Usage counters and a short activity log. The log only records metadata, meaning a
+  time, the site's hostname, the type of event, and how many items were involved. It
+  does not record the secret or personal values themselves.
 
-This data stays in your browser profile. It is never uploaded, shared, or sold. You
-can clear it at any time from the extension's settings page, or by removing the
-extension.
+This stays in your browser profile. It is never uploaded, shared, or sold. You can
+clear it from the settings page at any time, or by removing the extension.
 
-## What the extension does NOT do
+## What it does not do
 
-- It does **not** send any data to the developer or to any third party.
-- It does **not** use analytics, telemetry, cookies, or fingerprinting.
-- It does **not** require an account or any sign-in.
-- It does **not** run on login, password, or registration pages, and it stays out
-  of document editors such as Google Docs — by design.
+* It does not send anything to me or to any third party.
+* It does not use analytics, telemetry, cookies, or fingerprinting.
+* It does not need an account or a login.
+* It stays off login, password, and registration pages, and out of editors like
+  Google Docs, on purpose.
 
 ## Permissions
 
-- **storage** — to save your settings and local usage counters on your device.
-- **Host access (`<all_urls>`)** — the content script must be able to run on any
-  site, because you could paste, upload, or view a secret anywhere (AI chat tools,
-  dashboards, webmail, internal apps). It runs locally only and makes no network
-  requests.
+* `storage`: to save your settings and local counters on your device.
+* Host access (`<all_urls>`): the content script needs to run on any site, because you
+  might paste, upload, or view a secret anywhere. It only ever works locally and makes
+  no network requests.
 
 ## Open source
 
-DLP Guard is open source. You can review exactly what it does at
-<https://github.com/miglen/dlp-guard>.
+The full code is public at https://github.com/miglen/dlp-guard, so you can check
+exactly what it does.
 
 ## Contact
 
-Questions about this policy: [Miglen Evlogiev](https://miglen.com).
+If you have a question about this policy, reach me at https://miglen.com.
 
 ## Changes
 
-If this policy changes, the updated version will be published in this file with a new
-"last updated" date.
+If this policy changes, I will update this file and change the date at the top.
